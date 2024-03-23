@@ -1,7 +1,21 @@
 """
 Main File for BARL and associated code.
+
+@REMY:
+
+Interesting ideas in the original implementation:
+- Learn reward
+- Gradient descent optimization
+- Kgrl, pilco, kg_policy
+
+
+# TODO: Global
+
+- requirements.txt
+
 """
 
+import argparse
 from argparse import Namespace
 from pathlib import Path
 import pickle
@@ -20,7 +34,10 @@ from matplotlib import pyplot as plt
 import gpflow.config
 from sklearn.metrics import explained_variance_score
 
-from barl.models.gpfs_gp import BatchMultiGpfsGp, TFMultiGpfsGp
+
+import barl
+
+from barl.models.gpfs_gp import BatchMultiGpfsGp, TFMultiGpfsGp, MultiGpfsGp
 from barl.models.gpflow_gp import get_gpflow_hypers_from_data
 from barl.acq.acquisition import (
     MultiBaxAcqFunction,
@@ -37,7 +54,7 @@ from barl.acq.acqoptimize import (
     PolicyAcqOptimizer,
 )
 from barl.alg.mpc import MPC
-from barl import envs
+from barl import envs, alg
 from barl.envs.wrappers import (
     NormalizedEnv,
     make_normalized_reward_function,
@@ -77,7 +94,18 @@ import omegaconf
 from evaluation.metrics import MetricWizard
 
 
-from typing import Callable
+from typing import Callable, TypedDict, Type, Tuple, Dict, Any
+
+
+# Declare a type EnvBARL with a mandatory attribute horizon
+# This is used to ensure that the environment has a horizon attribute
+
+
+class EnvBARL(gymnasium.Env):
+    def __init__(self, horizon: int):
+        self.horizon: int = horizon  # TODO: Improve this
+        super().__init__()
+
 
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
@@ -94,7 +122,7 @@ plot_path = "plots"
     config_path="cfg", config_name="config", version_base=None
 )  # CHANGES @REMY: version_base=None is added to clear a warning
 # (see https://hydra.cc/docs/1.2/upgrades/version_base/)
-def main(config):
+def main(config: omegaconf.DictConfig):
     path_current_script = Path(__file__).parent
     path_mlflow_uri = Path(path_current_script / "experiments" / "mlruns").resolve()
 
@@ -155,7 +183,7 @@ def main(config):
         main_original(config, path_barl_data=path_barl_data)
 
 
-def main_original(config, path_barl_data: str):
+def main_original(config: omegaconf.DictConfig, path_barl_data: str):
     # ==============================================
     #   Define and configure
     # ==============================================
@@ -176,31 +204,32 @@ def main_original(config, path_barl_data: str):
 
     # Instantiate environment and create functions for dynamics, plotting,
     # rewards, state updates
-    env, f, plot_fn, reward_function, update_fn, p0 = get_env(config)
 
-    # CHANGES @REMY: assert the observation and action spaces are Box
-    assert isinstance(env.observation_space, gymnasium.spaces.Box)
-    assert isinstance(env.action_space, gymnasium.spaces.Box)
-    # CHANGES @REMY: End
-
-    obs_dim = env.observation_space.low.size
-    action_dim = env.action_space.low.size
-
-    # CHANGES @STELLA: evaluation environment
-    eval_env, eval_f, eval_plot_fn, eval_reward_function, eval_update_fn, eval_p0 = (
-        get_env(config)
+    tuple_barl_env_objects: tuple[EnvBARL, Callable, Callable, Callable, Callable] = (
+        get_env(config=config)
+    )
+    gym_env, f_transition_mpc, reward_function, update_fn, probability_x0 = (
+        tuple_barl_env_objects
     )
 
-    # CHANGES @REMY: Start - Eval things on the semimarkov model
-    # Add environment for acquisition optimisation - this is useless
-    # (
-    #     acqopt_env,
-    #     acqopt_f,
-    #     acqopt_plot_fn,
-    #     acqopt_reward_function,
-    #     acqopt_update_fn,
-    #     acqopt_p0,
-    # ) = get_env(config)
+    # CHANGES @REMY: assert the observation and action spaces are Box
+    assert isinstance(gym_env.observation_space, gymnasium.spaces.Box)
+    assert isinstance(gym_env.action_space, gymnasium.spaces.Box)
+    # assert the environment has a horizon attribute
+    assert hasattr(gym_env, "horizon"), "Environment must have a horizon attribute"
+    # CHANGES @REMY: End
+
+    obs_dim = gym_env.observation_space.low.size
+    action_dim = gym_env.action_space.low.size
+
+    # CHANGES @STELLA: evaluation environment
+
+    tuple_barl_env_objects_eval: tuple[
+        EnvBARL, Callable, Callable, Callable, Callable
+    ] = get_env(config=config)
+    eval_env, _, eval_reward_function, _, _ = tuple_barl_env_objects_eval
+
+    # CHANGES @REMY: Start - Check the semimarkov horizon parameter
     # Check the semimarkov horizon parameter
     assert (
         config.alg.get("n_semimarkov_dt") is not None
@@ -209,62 +238,76 @@ def main_original(config, path_barl_data: str):
         type(config.alg.get("n_semimarkov_dt")) is int
     ), "n_semimarkov_dt must be an integer"
     assert config.alg.get("n_semimarkov_dt") >= 1, "n_semimarkov_dt must be positive"
+
     # New upper bound for horizon on the environment
-    env.horizon *= config.alg.n_semimarkov_dt
+    gym_env.horizon *= config.alg.n_semimarkov_dt
     # CHANGES @REMY: End
 
     # Set start obs
     if config.alg.open_loop:
-        config.fixed_start_obs = True
-    start_obs, _ = env.reset() if config.fixed_start_obs else None, {}
-    logging.info(f"Start obs: {start_obs}")
+        config.fixed_start_obs = True  # TODO: Remove this hack
+    array_x0: tuple
+    array_x0, _ = gym_env.reset() if config.fixed_start_obs else None, {}
+    logging.info(f"Start obs: {array_x0}")
     # CHANGES @REMY: Start - Generate a list of start observations for evaluation
-    if not config.fixed_start_obs:
-        start_obs = env.reset()[0]
-    list_start_obs = [eval_env.reset()[0]] + [
-        eval_env.reset()[0] for _ in range(config.num_eval_trials - 1)
+    if not config.fixed_start_obs:  # TODO: Remove this ?
+        array_x0: np.array = gym_env.reset()[0]
+    list_array_x0: list[np.array] = [
+        eval_env.reset()[0] for _ in range(config.num_eval_trials)
     ]
+
     # CHANGES @REMY: End
 
     # Set domain
-    low = np.concatenate([env.observation_space.low, env.action_space.low])
-    high = np.concatenate([env.observation_space.high, env.action_space.high])
-    domain = [elt for elt in zip(low, high)]
+    array_state_action_domain_lower_bound: np.array = np.concatenate(
+        [gym_env.observation_space.low, gym_env.action_space.low]
+    )
+    array_state_action_domain_upper_bound: np.array = np.concatenate(
+        [gym_env.observation_space.high, gym_env.action_space.high]
+    )
+    list_tuple_domain: list[tuple[float, float]] = [
+        tuple_bound
+        for tuple_bound in zip(
+            array_state_action_domain_lower_bound, array_state_action_domain_upper_bound
+        )
+    ]
 
     # Set algorithm
-    algo_class = MPC
-    # algo_params = dict(
-    #     start_obs=start_obs,
-    #     env=env,
-    #     reward_function=reward_function,
-    #     project_to_domain=config.project_to_domain,
-    #     base_nsamps=config.mpc.nsamps,
-    #     planning_horizon=config.mpc.planning_horizon,
-    #     n_elites=config.mpc.n_elites,
-    #     beta=config.mpc.beta,
-    #     gamma=config.mpc.gamma,
-    #     xi=config.mpc.xi,
-    #     num_iters=config.mpc.num_iters,
-    #     actions_per_plan=config.mpc.actions_per_plan,
-    #     domain=domain,
-    #     action_lower_bound=env.action_space.low,
-    #     action_upper_bound=env.action_space.high,
-    #     crop_to_domain=config.crop_to_domain,
-    #     update_fn=update_fn,
-    #     rollout=config.alg.simple_rollout_sampling,  # CHANGES @STELLA
-    # )
+    algo_class: Type[barl.alg.mpc.MPC] = barl.alg.mpc.MPC
+
     if config.alg.open_loop:
         config.test_mpc = config.eigmpc
-        config.test_mpc.planning_horizon = env.horizon
-        config.test_mpc.actions_per_plan = env.horizon
+        config.test_mpc.planning_horizon = gym_env.horizon
+        config.test_mpc.actions_per_plan = gym_env.horizon
         logging.info("Swapped config because of open loop control")
-    test_algo_params = dict(
-        start_obs=start_obs,
+    dict_test_algo_params: TypedDict(  # TODO: Move this to a separate file
+        "dict_test_algo_params",
+        {
+            "start_obs": np.ndarray,
+            "env": EnvBARL,
+            "reward_function": Callable,
+            "project_to_domain": Callable,
+            "base_nsamps": int,
+            "planning_horizon": int,
+            "n_elites": int,
+            "beta": float,
+            "gamma": float,
+            "xi": float,
+            "num_iters": int,
+            "actions_per_plan": int,
+            "domain": list[tuple[float, float]],
+            "action_lower_bound": np.ndarray,
+            "action_upper_bound": np.ndarray,
+            "crop_to_domain": bool,
+            "update_fn": Callable,
+        },
+    ) = dict(
+        start_obs=array_x0,
         env=eval_env,  # CHANGES @REMY: this env is not very useful as only reset is
         # used when no starting obs is provided. otherwise
         # the spaces may be sampled from that env
-        reward_function=eval_reward_function,
-        project_to_domain=config.project_to_domain,
+        reward_function=eval_reward_function,  # TODO: warning here the eval is passed
+        project_to_domain=config["project_to_domain"],
         base_nsamps=config.test_mpc.nsamps,
         planning_horizon=config.test_mpc.planning_horizon,
         n_elites=config.test_mpc.n_elites,
@@ -273,48 +316,46 @@ def main_original(config, path_barl_data: str):
         xi=config.test_mpc.xi,
         num_iters=config.test_mpc.num_iters,
         actions_per_plan=config.test_mpc.actions_per_plan,
-        domain=domain,
-        action_lower_bound=env.action_space.low,
-        action_upper_bound=env.action_space.high,
+        domain=list_tuple_domain,
+        action_lower_bound=gym_env.action_space.low,
+        action_upper_bound=gym_env.action_space.high,
         crop_to_domain=config.crop_to_domain,
         update_fn=update_fn,
     )
     # algo = algo_class(algo_params)
-    test_algo = algo_class(test_algo_params)
+    test_algo: barl.alg.mpc.MPC = algo_class(params=dict_test_algo_params)
 
-    # Set initial data
-    if current_iter > 0:
-        data = Namespace()  # INFO @REMY: This is the dataset D of the BARL algo.
-        data.x = (
-            [] + dumper.info["x"]
-        )  # important to be initialised this way!!  # INFO @REMY: this is from Stella
-        data.y = [] + dumper.info["y"]  # important to be initialised this way!!
-    else:
-        data = get_initial_data(
-            config, env, f, domain, dumper, plot_fn
-        )  # INFO @REMY: plot_fn is passed because the inital data point will be plotted
+    data: Namespace = get_initial_data(
+        config=config,
+        gym_env=gym_env,
+        f_transition_mpc=f_transition_mpc,
+        list_tuple_domain=list_tuple_domain,
+        dumper=dumper,
+    )  # INFO @REMY: plot_fn is passed because the inital data point will be plotted
 
     # Make a test set for model evalution separate from the controller
     logging.info(f"Creating test set of size {config.test_set_size}")
-    test_data = Namespace()
-    test_data.x = unif_random_sample_domain(domain, config.test_set_size)
-    try:
-        test_data.y = f(test_data.x)
-    except TypeError:
-        logging.info("Test set creation failed")
-        raise TypeError("Test set creation failed")
+    test_data: Namespace = Namespace()
+    test_data.x: list[np.array] = unif_random_sample_domain(
+        list_tuple_domain, config.test_set_size
+    )
+
+    test_data.y = f_transition_mpc(test_data.x)
+
     dumper.add("test x", test_data.x, verbose=False)
     dumper.add("test y", test_data.y, verbose=False)
 
     # Set model
-    gp_model_class, gp_model_params = get_model(config, env, obs_dim, action_dim)
+    gp_model_class: Type[MultiGpfsGp]
+    gp_model_params: Dict[str, Any]
+    gp_model_class, gp_model_params = get_model(config, gym_env, obs_dim, action_dim)
 
     # Set acqfunction
     acqfn_class, acqfn_params = (
         get_acq_fn(  # INFO @REMY: only gets objects and dict parameters
             config,
-            env.horizon,  # INFO @REMY: horizon is useless in BARL and TIP cases
-            p0,
+            gym_env.horizon,  # INFO @REMY: horizon is useless in BARL and TIP cases
+            probability_x0,
             reward_function,
             update_fn,
             obs_dim,
@@ -325,14 +366,18 @@ def main_original(config, path_barl_data: str):
     )
     acqfn_params["dumper"] = dumper  # CHANGES @STELLA
     # pick a sampler for start states
-    s0_sampler = env.observation_space.sample if config.alg.sample_all_states else p0
+    s0_sampler = (
+        gym_env.observation_space.sample
+        if config.alg.sample_all_states
+        else probability_x0
+    )
     acqopt_class, acqopt_params = (
         get_acq_opt(  # INFO @REMY: only gets objects and dict parameters
             config,
             obs_dim,
             action_dim,
-            env,
-            start_obs,
+            gym_env,
+            # start_obs,
             update_fn,
             s0_sampler,  # INFO @REMY: env is never used by TIP
         )
@@ -345,12 +390,12 @@ def main_original(config, path_barl_data: str):
         true_path, test_mpc_data = execute_gt_mpc(
             config,
             algo_class,
-            test_algo_params,
-            f,
+            dict_test_algo_params,
+            f_transition_mpc,
             dumper,
-            domain,
+            list_tuple_domain,
             plot_fn,  # CHANGES @REMY: test_algo_params is passed instead of algo_params
-            list_start_obs,
+            list_array_x0,
             eval_env,
         )
         dumper.add("gt_paths", true_path, verbose=False)
@@ -378,7 +423,7 @@ def main_original(config, path_barl_data: str):
             config,
             fit_data,
             plot_fn,
-            domain,
+            list_tuple_domain,
             dumper.expdir,
             obs_dim,
             action_dim,
@@ -392,7 +437,7 @@ def main_original(config, path_barl_data: str):
     # ==============================================
 
     # Set current_obs as fixed start_obs or reset env
-    current_obs = get_start_obs(config, start_obs, env)
+    current_obs = get_start_obs(config, array_x0, gym_env)
     dumper.add("Start Obs", current_obs)
     current_t = 0  # INFO @REMY: current timestep of the true system
     list_semi_markov_delays = (
@@ -410,7 +455,7 @@ def main_original(config, path_barl_data: str):
         logging.info("---" * 5 + f" Start iteration i={i} " + "---" * 5)
         logging.info(f"Length of data.x: {len(data.x)}")
         logging.info(f"Length of data.y: {len(data.y)}")
-        time_left = env.horizon - current_t
+        time_left = gym_env.horizon - current_t
 
         # =====================================================
         #   Figure out what the next point to query should be
@@ -426,9 +471,9 @@ def main_original(config, path_barl_data: str):
                 config,
                 test_algo,  # INFO @REMY: here is passed the MPC object used;
                 # we use the test_algo to not go to far in the time horizon
-                domain,
+                list_tuple_domain,
                 current_obs,
-                env.action_space,
+                gym_env.action_space,
                 gp_model_class,
                 gp_model_params,
                 acqfn_class,
@@ -461,18 +506,18 @@ def main_original(config, path_barl_data: str):
                 config,
                 test_algo,
                 model,
-                start_obs,
+                array_x0,
                 eval_env,
-                f,
+                # f,
                 dumper,
                 data,
                 test_data,  # INFO @REMY: test_data is a Namespace
                 # with x and y attributes, from random sampling of the domain
                 test_mpc_data,
-                domain,
+                list_tuple_domain,
                 update_fn,
                 reward_function,
-                list_start_obs,  # CHANGES @REMY: to fix the same
+                list_array_x0,  # CHANGES @REMY: to fix the same
                 # start state for all trials
             )
 
@@ -486,7 +531,7 @@ def main_original(config, path_barl_data: str):
             make_plots(
                 eval_plot_fn,  # CHANGES @REMY: this is the plot
                 # function for the evaluation environment
-                domain,
+                list_tuple_domain,
                 true_path,
                 data,
                 eval_env,  # CHANGES @REMY: this is the evaluation environment
@@ -505,7 +550,7 @@ def main_original(config, path_barl_data: str):
         if config.alg.rollout_sampling:
             # Query function, update data
             # try:
-            y_next = f([x_next])[0]
+            y_next = f_transition_mpc([x_next])[0]
             # CHANGES @REMY: Start - Add the option to use the semimarkov model
             # (will overwrite line above)
             if getattr(config.alg, "n_semimarkov_dt", None) is not None:
@@ -516,14 +561,14 @@ def main_original(config, path_barl_data: str):
                 for _ in range(n_corresponding_dt - 1):
                     # Set the actions to zero during the non-actuation period
                     # Take action
-                    y_next_tmp = f([x_next_tmp])[0]
+                    y_next_tmp = f_transition_mpc([x_next_tmp])[0]
                     state_tmp = (
                         y_next_tmp + x_next_tmp[:obs_dim]
                     )  # Sum the derivative to the state
                     x_next_tmp = np.concatenate([state_tmp, x_next[-action_dim:]])
                 # Set the actions to the actual action
                 x_next = np.concatenate([x_next_tmp[:obs_dim], x_next[-action_dim:]])
-                y_next = f([x_next])[
+                y_next = f_transition_mpc([x_next])[
                     0
                 ]  # Note there is no projection to the domain here
                 # Dump the estimated vs real next state difference
@@ -584,7 +629,7 @@ def main_original(config, path_barl_data: str):
                 reward = reward_function(x_next, current_obs, current_step=current_t)
             current_rewards.append(reward)
             logging.info(f"Instantaneous reward state-action pair collected: {reward}")
-            if current_t >= env.horizon:
+            if current_t >= gym_env.horizon:
                 current_return = compute_return(current_rewards, 1.0)
                 logging.info(
                     f"Explore episode complete with return {current_return}, resetting"
@@ -592,7 +637,7 @@ def main_original(config, path_barl_data: str):
                 dumper.add("Exploration Episode Rewards", current_rewards)
                 current_rewards = []
                 current_t = 0
-                current_obs = get_start_obs(config, start_obs, env)
+                current_obs = get_start_obs(config, array_x0, gym_env)
                 # clear action sequence if it was there
                 # (only relevant for KGRL policy, noop otherwise)
                 acqopt_params["action_sequence"] = None
@@ -601,7 +646,9 @@ def main_original(config, path_barl_data: str):
             # BARL algorithm not the unrollout case
             # INFO @STELLA: Query function, update data for original BARL
             try:  # INFO @REMY: obs_delta is y_next in the original BARL algorithm
-                obs_delta = f([x_next])[0]  # INFO @STELLA: next state delta
+                obs_delta = f_transition_mpc([x_next])[
+                    0
+                ]  # INFO @STELLA: next state delta
                 x_next = np.array(x_next).astype(np.float64)
                 obs_delta = np.array(obs_delta).astype(
                     np.float64
@@ -615,7 +662,7 @@ def main_original(config, path_barl_data: str):
                 except TypeError:
                     reward = reward_function(x_next, next_obs, current_step=current_t)
                 terminated = (
-                    current_t >= env.horizon
+                    current_t >= gym_env.horizon
                 )  # INFO @REMY: this has been added by Stella for logging purposes
                 info = {}
                 action = x_next[-action_dim:]
@@ -654,7 +701,7 @@ def main_original(config, path_barl_data: str):
                 terminated
             ):  # INFO @REMY: this has been added by Stella TODO: I think this is
                 # unnecessary as start_obs is never used in thet no-rollout setting
-                start_obs, _ = env.reset() if config.fixed_start_obs else None, {}
+                array_x0, _ = gym_env.reset() if config.fixed_start_obs else None, {}
 
         # Dumper save
         dumper.save()
@@ -698,79 +745,87 @@ def get_env(config: omegaconf.DictConfig):
     )
     # CHANGES @REMY: End
     logging.info(f"ENV NAME: {config.env.name}")
-    env: gymnasium.Env = gymnasium.make(
+    gym_env: EnvBARL | gymnasium.Env = gymnasium.make(
         config.env.name, seed=config.seed, **dict_environment_parameters
     )
     # CHANGES @REMY: Start - Generate a random seed, which random behaviour
     # is controlled by the global np random seed
     # Allows notably to have a different fixed seed for each get_env call
     local_seed: int = np.random.randint(0, np.iinfo(np.int32).max)
-    env.reset(
+    gym_env.reset(
         seed=local_seed
     )  # CHANGES @REMY: this should allow to fix env seed; useless for Lorenz
     # CHANGES @REMY: End
     # set plot fn  # TODO: remove this
-    plot_fn = partial(plotters[config.env.name], env=env)
+    plot_fn = partial(plotters[config.env.name], env=gym_env)
 
     if not config.alg.learn_reward:
         if config.alg.gd_opt:
-            reward_function = envs.tf_reward_functions[config.env.name]
+            # reward_function: Callable[[np.array, np.array, int], np.array] = (
+            #     envs.tf_reward_functions[config.env.name]
+            # )
             raise NotImplementedError("# CHANGES @REMY: this is not implemented")
         else:
-            reward_function = envs.reward_functions[config.env.name]
+            reward_function: Callable[[np.array, np.array, int], np.array] = (
+                envs.reward_functions[config.env.name]
+            )
     else:
-        reward_function = None
+        raise NotImplementedError("# CHANGES @REMY: this is not implemented")
+        # reward_function = None
     if config.normalize_env:
-        env = NormalizedEnv(env)
+        gym_env: gymnasium.Env = envs.wrappers.NormalizedEnv(gym_env)
         if reward_function is not None:
             reward_function = make_normalized_reward_function(
-                env, reward_function, config.alg.gd_opt
+                norm_env=gym_env,
+                reward_function=reward_function,
             )
-        plot_fn = make_normalized_plot_fn(env, plot_fn)
+        plot_fn = make_normalized_plot_fn(gym_env, plot_fn)  # TODO: remove this
     if config.alg.learn_reward:
-        f = get_f_batch_mpc_reward(env, use_info_delta=config.teleport)
+        raise NotImplementedError("# CHANGES @REMY: this is not implemented")
+        # f = get_f_batch_mpc_reward(env, use_info_delta=config.teleport)
     else:
-        f = get_f_batch_mpc(env, use_info_delta=config.teleport)
-    update_fn = make_update_obs_fn(
-        env, teleport=config.teleport, use_tf=config.alg.gd_opt
+        f_transition_mpc: Callable = get_f_batch_mpc(
+            env=gym_env, use_info_delta=config.teleport
+        )
+    update_fn: Callable = make_update_obs_fn(
+        env=gym_env, teleport=config.teleport, use_tf=config.alg.gd_opt
     )
-    p0 = env.reset
-    return env, f, plot_fn, reward_function, update_fn, p0
+    probability_x0 = gym_env.reset
+    return gym_env, f_transition_mpc, reward_function, update_fn, probability_x0
 
 
-def get_initial_data(config, env, f, domain, dumper, plot_fn):
-    data = Namespace()
+def get_initial_data(
+    config: omegaconf.DictConfig,
+    gym_env: EnvBARL,
+    f_transition_mpc: Callable,
+    list_tuple_domain: list[tuple[float, float]],
+    dumper: Dumper,
+) -> Namespace:  # @REMY: the list format is required for "batch" functions
+    data: argparse.Namespace = Namespace()
+    # TODO: WARNING: the initial point is sampled again
     if config.sample_init_initially:
-        data.x = [
+        data.x: list[np.array] = [
             np.concatenate(
-                [env.reset()[0], env.action_space.sample()]
+                [gym_env.reset()[0], gym_env.action_space.sample()]
             )  # INFO @REMY: the seed is already fixed before
             for _ in range(config.num_init_data)
         ]
     else:
-        data.x = unif_random_sample_domain(domain, config.num_init_data)
-    try:
-        data.y = f(data.x)
-    except TypeError:
-        logging.warning("Environment doesn't seem to support teleporting")
-        data.x = []
-        data.y = []
-        return data
+        data.x = unif_random_sample_domain(list_tuple_domain, config.num_init_data)
+
+    data.y = f_transition_mpc(data.x)
+
     dumper.extend("x", data.x)
     dumper.extend("y", data.y)
 
-    # Plot initial data (TODO, refactor plotting)
-    ax_obs_init, fig_obs_init = plot_fn(
-        path=None, domain=domain, env=env
-    )  # CHANGES @REMY: this is the plot function for the training environment
-    if ax_obs_init is not None and config.save_figures:
-        plot(ax_obs_init, data.x, "o", color="k", ms=1)
-        fig_obs_init.suptitle("Initial Observations")
-        neatplot.save_figure(str(dumper.expdir / "obs_init"), "png", fig=fig_obs_init)
+    # Plot initial data (TODO: PLOT refactor plotting)
+
     return data
 
 
-def get_model(config, env, obs_dim, action_dim):
+def get_model(
+    config: omegaconf.DictConfig, gym_env: EnvBARL, obs_dim: int, action_dim: int
+) -> Tuple[Type[MultiGpfsGp], Dict[str, Any]]:
     gp_params = {
         "ls": config.env.gp.ls,
         "alpha": config.env.gp.alpha,
@@ -779,7 +834,7 @@ def get_model(config, env, obs_dim, action_dim):
     }
     if config.env.gp.periodic:
         gp_params["kernel_str"] = "rbf_periodic"
-        gp_params["periodic_dims"] = env.periodic_dimensions
+        gp_params["periodic_dims"] = gym_env.periodic_dimensions
         gp_params["period"] = config.env.gp.period
     gp_model_params = {
         "n_dimy": obs_dim,
@@ -797,7 +852,7 @@ def get_model(config, env, obs_dim, action_dim):
 def get_acq_fn(
     config,
     horizon,
-    p0,
+    probability_x0,
     reward_fn,
     update_fn,
     obs_dim,
@@ -821,7 +876,7 @@ def get_acq_fn(
             "num_s0": config.alg.num_s0,
             "num_sprime_samps": config.alg.num_sprime_samps,
             "rollout_horizon": horizon,
-            "p0": p0,
+            "p0": probability_x0,
             "reward_fn": reward_fn,
             "update_fn": update_fn,
             "gp_model_class": gp_model_class,
@@ -866,7 +921,7 @@ def get_acq_opt(
     config,
     obs_dim,
     action_dim,
-    env,
+    gym_env,
     # start_obs,
     update_fn,
     s0_sampler,
@@ -889,8 +944,8 @@ def get_acq_opt(
             "s0_sampler": s0_sampler,
         }
         if config.alg.open_loop:
-            acqopt_params["planning_horizon"] = env.horizon
-            acqopt_params["actions_per_plan"] = env.horizon
+            acqopt_params["planning_horizon"] = gym_env.horizon
+            acqopt_params["actions_per_plan"] = gym_env.horizon
         acqopt_class = PolicyAcqOptimizer  # INFO @REMY Standard original TIP
         # (TIP = Trajectory Information Planning)
         # CHANGES @REMY: Start - Add the option to use the semimarkov model
@@ -908,7 +963,7 @@ def fit_hypers(
     config,
     fit_data,
     plot_fn,
-    domain,
+    list_tuple_domain,
     expdir,
     obs_dim,
     action_dim,
@@ -937,7 +992,9 @@ def fit_hypers(
         logging.info(f"Number of observations in fit_data: {len(fit_data.x)}")
 
         # Plot hyper fitting data
-        ax_obs_hyper_fit, fig_obs_hyper_fit = plot_fn(path=None, domain=domain)
+        ax_obs_hyper_fit, fig_obs_hyper_fit = plot_fn(
+            path=None, domain=list_tuple_domain
+        )
         if ax_obs_hyper_fit is not None and config.save_figures:
             plot(ax_obs_hyper_fit, fit_data.x, "o", color="k", ms=1)
             neatplot.save_figure(
@@ -978,8 +1035,8 @@ def fit_hypers(
     logging.info(f"Explained Variance on test data: {ev:.2%}")
     # CHANGES @REMY: Start - Write the results of gp_params as a text file
     Path(expdir / "fit_hypers").mkdir(parents=True, exist_ok=False)
-    with open(expdir / "fit_hypers" / "gp_params.yaml", "w") as f:
-        yaml.dump(gp_params, f)
+    with open(expdir / "fit_hypers" / "gp_params.yaml", "w") as f_transition_mpc:
+        yaml.dump(gp_params, f_transition_mpc)
     print(f"Parameters written to {expdir / 'fit_hypers' / 'gp_params.txt'}")
     # CHANGES @REMY: End
     for i in range(ytest.shape[1]):
@@ -999,9 +1056,9 @@ def execute_gt_mpc(
     algo_params,
     f,
     dumper,
-    domain,
+    list_tuple_domain,
     plot_fn,
-    list_start_obs,
+    list_array_x0,
     env=None,
 ):  # CHANGES @REMY: env is going to be used to get scaling constant
     # Instantiate true algo and axes/figures
@@ -1025,8 +1082,8 @@ def execute_gt_mpc(
             not config.fixed_start_obs
         ):  # INFO @REMY: this is the case for the original BARL algo;
             # where only one start state is used
-            start_obs = list_start_obs[i]
-            algo_params["start_obs"] = start_obs
+            array_x0 = list_array_x0[i]
+            algo_params["start_obs"] = array_x0
             true_algo = algo_class(algo_params)
         # CHANGES @REMY: End
         # Run algorithm and extract paths
@@ -1049,7 +1106,7 @@ def execute_gt_mpc(
         # Plot groundtruth paths and print info
         # ax_gt, fig_gt = plot_fn(true_path, ax_gt, fig_gt, domain, "samp")
         ax_gt_1d, fig_gt_1d = plot_fn(
-            true_path, ax_gt_1d, fig_gt_1d, domain, "gt_1d", env=env
+            true_path, ax_gt_1d, fig_gt_1d, list_tuple_domain, "gt_1d", env=gym_env
         )  # CHANGES @REMY: new plot function
         returns.append(compute_return(output[2], 1))
         stats = {"Mean Return": np.mean(returns), "Std Return:": np.std(returns)}
@@ -1094,7 +1151,7 @@ def get_next_point(
     i,
     config,
     algo,
-    domain,
+    list_tuple_domain,
     current_obs,
     action_space,
     gp_model_class,
@@ -1194,7 +1251,7 @@ def get_next_point(
             )  # INFO @REMY: add some noise to the sampled points
             x_test = list(x_test)
             x_test += unif_random_sample_domain(
-                domain, n=n_rand
+                list_tuple_domain, n=n_rand
             )  # INFO @REMY: add n_rand points sampled uniformly
             # from the domain in order to have n_rand_acqopt points in total
             # Store returns of posterior samples
@@ -1220,11 +1277,11 @@ def get_next_point(
                     logging.info(err)
                     logging.info(f"Uniform Sampling from scratch")
                     x_test = unif_random_sample_domain(
-                        domain, n=config.n_rand_acqopt - size
+                        list_tuple_domain, n=config.n_rand_acqopt - size
                     )
             else:
                 x_test = unif_random_sample_domain(
-                    domain, n=config.n_rand_acqopt - size
+                    list_tuple_domain, n=config.n_rand_acqopt - size
                 )
             x_test.extend(_sampling_pool)
             dumper.add("Sampled Data", x_test, verbose=False)
@@ -1238,10 +1295,14 @@ def get_next_point(
                 except FileNotFoundError as err:
                     logging.info(err)
                     logging.info(f"Uniform Sampling from scratch")
-                    x_test = unif_random_sample_domain(domain, n=config.n_rand_acqopt)
+                    x_test = unif_random_sample_domain(
+                        list_tuple_domain, n=config.n_rand_acqopt
+                    )
                     dumper.add("Sampled Data", x_test, verbose=False)
             else:
-                x_test = unif_random_sample_domain(domain, n=config.n_rand_acqopt)
+                x_test = unif_random_sample_domain(
+                    list_tuple_domain, n=config.n_rand_acqopt
+                )
             dumper.add("Sampled Data", x_test, verbose=False)
         try:
             exe_path_list = (
@@ -1280,7 +1341,7 @@ def get_next_point(
             # CHANGES @REMY: Start - Add the option to use the semimarkov model
             if getattr(config.alg, "n_semimarkov_dt", None) is not None:
                 x_nexts, acq_val, _, _ = acqopt.optimize(x_test)
-                x_next = x_nexts[0]
+                x_next: np.array = x_nexts[0]
                 index_best_element = int(
                     np.where((np.array(x_test) == x_next).all(axis=1))[0]
                 )
@@ -1344,7 +1405,7 @@ def get_next_point(
         action = policy(current_obs)
         x_next = np.concatenate([current_obs, action])
     else:  # INFO @REMY: this is the random sampling case
-        x_next = unif_random_sample_domain(domain, 1)[0]
+        x_next = unif_random_sample_domain(list_tuple_domain, 1)[0]
 
     if (
         config.alg.rollout_sampling or config.alg.simple_rollout_sampling
@@ -1369,17 +1430,17 @@ def evaluate_mpc(
     config,
     algo,
     model,
-    start_obs,
+    array_x0,
     env,  # INFO @REMY: env is passed to evaluate_policy and stepped through
     # f,
     dumper,
     data,
     test_data,
     test_mpc_data,
-    domain,
+    list_tuple_domain,
     update_fn,
     reward_fn,
-    list_start_obs,  # CHANGES @REMY: to fix the same start state for all trials
+    list_array_x0,  # CHANGES @REMY: to fix the same start state for all trials
 ):
     if model is None:
         return
@@ -1404,7 +1465,7 @@ def evaluate_mpc(
                 num_fs=config.test_mpc.num_fs,
                 num_iters=config.test_mpc.num_iters,
                 actions_per_plan=config.test_mpc.actions_per_plan,
-                domain=domain,
+                domain=list_tuple_domain,
                 action_lower_bound=env.action_space.low,
                 action_upper_bound=env.action_space.high,
                 crop_to_domain=config.crop_to_domain,
@@ -1435,14 +1496,14 @@ def evaluate_mpc(
                 not config.fixed_start_obs
             ):  # INFO @REMY: this is the case for the original BARL algo;
                 # where only one start state is used
-                start_obs = list_start_obs[j]
+                array_x0 = list_array_x0[j]
             # CHANGES @REMY: End
             real_obs, real_actions, real_rewards = (
                 evaluate_policy(  # INFO @REMY: this applies the MPC policy on
                     # Gaussian processes to the ground truth environment
                     policy,
                     env,
-                    start_obs=start_obs,
+                    start_obs=array_x0,
                     mpc_pass=not config.eval_bayes_policy,
                     dumper=dumper,  # CHANGES @STELLA
                 )
@@ -1526,7 +1587,7 @@ def get_start_obs(config, start_obs, env):
 
 def make_plots(
     plot_fn,
-    domain,
+    list_tuple_domain,
     true_path,
     data,
     env,
@@ -1544,15 +1605,15 @@ def make_plots(
     # ax_all, fig_all = plot_fn(path=None, domain=domain)
     # ax_postmean, fig_postmean = plot_fn(path=None, domain=domain)
     # ax_samp, fig_samp = plot_fn(path=None, domain=domain)
-    ax_obs, fig_obs = plot_fn(path=None, domain=domain, env=env)
+    ax_obs, fig_obs = plot_fn(path=None, domain=list_tuple_domain, env=env)
 
     # INFO @REMY: plot 1d views of the posterior mean and samples;
     # Remark: here the path_str is used to create subplots
     ax_postmean_1d, fig_postmean_1d = plot_fn(
-        path=None, domain=domain, path_str="postmean_1d", env=env
+        path=None, domain=list_tuple_domain, path_str="postmean_1d", env=env
     )
     ax_samp_1d, fig_samp_1d = plot_fn(
-        path=None, domain=domain, path_str="samp_1d", env=env
+        path=None, domain=list_tuple_domain, path_str="samp_1d", env=env
     )
 
     # Plot true path and posterior path samples
@@ -1595,7 +1656,7 @@ def make_plots(
         # ax_all, fig_all = plot_fn(path, ax_all, fig_all, domain, "samp")
         # ax_samp, fig_samp = plot_fn(path, ax_samp, fig_samp, domain, "samp")
         ax_samp_1d, fig_samp_1d = plot_fn(
-            path, ax_samp_1d, fig_samp_1d, domain, "samp_1d", env=env
+            path, ax_samp_1d, fig_samp_1d, list_tuple_domain, "samp_1d", env=env
         )  # CHANGES @REMY: plot 1d views of the posterior samples
 
     # plot posterior mean paths
@@ -1611,7 +1672,12 @@ def make_plots(
         #     path, ax_postmean, fig_postmean, domain, "postmean"
         # )
         ax_postmean_1d, fig_postmean_1d = plot_fn(
-            path, ax_postmean_1d, fig_postmean_1d, domain, "postmean_1d", env=env
+            path,
+            ax_postmean_1d,
+            fig_postmean_1d,
+            list_tuple_domain,
+            "postmean_1d",
+            env=env,
         )  # CHANGES @REMY: plot 1d views of the posterior mean
 
     # CHANGES @REMY: Start - Change colors of lines
@@ -1769,13 +1835,23 @@ def sample_forward_points(
         acqopt.acqfunction.algorithm.params.project_to_domain
     ):  # TODO add the crop to domain option?
         # Set domain
-        low = np.concatenate([env.observation_space.low, env.action_space.low])
-        high = np.concatenate([env.observation_space.high, env.action_space.high])
-        domain = [elt for elt in zip(low, high)]
+        array_state_action_domain_lower_bound = np.concatenate(
+            [env.observation_space.low, env.action_space.low]
+        )
+        array_state_action_domain_upper_bound = np.concatenate(
+            [env.observation_space.high, env.action_space.high]
+        )
+        list_tuple_domain = [
+            elt
+            for elt in zip(
+                array_state_action_domain_lower_bound,
+                array_state_action_domain_upper_bound,
+            )
+        ]
         # Project to the domain
         matrix_mean_trajectory = np.array(
             [
-                project_to_domain(array_state_action, domain=domain)
+                project_to_domain(array_state_action, domain=list_tuple_domain)
                 for array_state_action in matrix_mean_trajectory
             ]
         )
