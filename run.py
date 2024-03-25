@@ -22,6 +22,7 @@ import pickle
 import logging
 import numpy as np
 import gymnasium
+import tqdm
 from tqdm import trange
 from functools import partial
 from copy import deepcopy
@@ -79,7 +80,7 @@ from barl.util.domain_util import (
     project_to_domain,
 )  # CHANGES @REMY: Add project to domain case
 from barl.util.timing import Timer
-from barl.viz import plotters, make_plot_obs, plot
+from barl.viz import plotters, make_plot_obs, plot, plot_ground_truth
 from barl.policies import BayesMPCPolicy
 import neatplot
 
@@ -386,24 +387,17 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
     # ==============================================
     #   Computing groundtruth trajectories
     # ==============================================
-    try:
-        true_path, test_mpc_data = execute_gt_mpc(
-            config,
-            algo_class,
-            dict_test_algo_params,
-            f_transition_mpc,
-            dumper,
-            list_tuple_domain,
-            plot_fn,  # CHANGES @REMY: test_algo_params is passed instead of algo_params
-            list_array_x0,
-            eval_env,
-        )
-        dumper.add("gt_paths", true_path, verbose=False)
-    except TypeError as err:
-        print(err)
-        # true_path = None
-        # test_mpc_data = None
-        raise TypeError("Groundtruth MPC failed")  # CHANGES @REMY: Easier to debug
+    list_namespace_true_path, namespace_test_mpc_data = execute_gt_mpc(
+        algo_class=algo_class,
+        dict_algo_params=dict_test_algo_params,
+        dict_config=config,
+        dumper=dumper,
+        env=gym_env,
+        f_transition_mpc=f_transition_mpc,
+        list_array_x0=list_array_x0,
+    )
+    dumper.add("gt_paths", list_namespace_true_path, verbose=False)
+
     # ==============================================
     #   Optionally: fit GP hyperparameters (then exit)
     # ==============================================
@@ -422,7 +416,6 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
         fit_hypers(
             config,
             fit_data,
-            plot_fn,
             list_tuple_domain,
             dumper.expdir,
             obs_dim,
@@ -513,7 +506,7 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
                 data,
                 test_data,  # INFO @REMY: test_data is a Namespace
                 # with x and y attributes, from random sampling of the domain
-                test_mpc_data,
+                namespace_test_mpc_data,
                 list_tuple_domain,
                 update_fn,
                 reward_function,
@@ -532,7 +525,7 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
                 eval_plot_fn,  # CHANGES @REMY: this is the plot
                 # function for the evaluation environment
                 list_tuple_domain,
-                true_path,
+                list_namespace_true_path,
                 data,
                 eval_env,  # CHANGES @REMY: this is the evaluation environment
                 config,
@@ -841,10 +834,7 @@ def get_model(
         "gp_params": gp_params,
         "tf_dtype": get_tf_dtype(config.tf_precision),
     }
-    if config.alg.kgrl or config.alg.pilco or config.alg.kg_policy:
-        gp_model_class = TFMultiGpfsGp
-    else:
-        gp_model_class = BatchMultiGpfsGp
+    gp_model_class = BatchMultiGpfsGp
     return gp_model_class, gp_model_params
 
 
@@ -1051,100 +1041,119 @@ def fit_hypers(
 
 
 def execute_gt_mpc(
-    config,
-    algo_class,
-    algo_params,
-    f,
-    dumper,
-    list_tuple_domain,
-    plot_fn,
-    list_array_x0,
-    env=None,
-):  # CHANGES @REMY: env is going to be used to get scaling constant
+    algo_class: Type[barl.alg.mpc.MPC | Any],
+    dict_algo_params: Dict[str, Any],
+    dict_config: omegaconf.DictConfig,
+    dumper: barl.util.misc_util.Dumper,
+    env: EnvBARL,
+    f_transition_mpc: Callable,
+    list_array_x0: list[np.array],
+) -> Tuple[list[Namespace], Namespace]:
+
+    # Assert the number of trials is strictly positive
+    assert (
+        dict_config.num_eval_trials > 0
+    ), "The number of evaluation trials must be strictly positive"
+
     # Instantiate true algo and axes/figures
-    true_algo = algo_class(algo_params)
-    ax_gt, fig_gt = None, None
-    ax_gt_1d, fig_gt_1d = (
-        None,
-        None,
-    )  # CHANGES @REMY: new figure for 1d time series plot
+    true_algo: barl.alg.mpc.MPC = algo_class(dict_algo_params)
 
     # Compute and plot true path (on true function) multiple times
-    full_paths = []
-    true_paths = []
-    returns = []
-    path_lengths = []
-    test_mpc_data = Namespace(x=[], y=[])
-    pbar = trange(config.num_eval_trials)
-    for i in pbar:
+    list_namespace_full_paths_x_y: list = []
+    list_namespace_true_path: list = []
+    list_returns: list = []
+    list_path_lengths: list = []
+    namespace_test_mpc_data: Namespace = Namespace(x=[], y=[])
+    tqdm_progress_bar = tqdm.trange(dict_config.num_eval_trials)
+    for id_eval_trial in tqdm_progress_bar:
         # CHANGES @REMY: Start - Add support for fixed multiple initial states
-        if (
-            not config.fixed_start_obs
-        ):  # INFO @REMY: this is the case for the original BARL algo;
+        if not dict_config.fixed_start_obs:
+            # INFO @REMY: this is the case for the original BARL algo;
             # where only one start state is used
-            array_x0 = list_array_x0[i]
-            algo_params["start_obs"] = array_x0
-            true_algo = algo_class(algo_params)
+            array_x0: np.array = list_array_x0[id_eval_trial]
+            dict_algo_params["start_obs"] = array_x0
+            true_algo = algo_class(dict_algo_params)
         # CHANGES @REMY: End
         # Run algorithm and extract paths
-        full_path, output = true_algo.run_algorithm_on_f(f)
-        full_paths.append(full_path)
-        path_lengths.append(len(full_path.x))
-        true_path = true_algo.get_exe_path_crop()
-        true_paths.append(true_path)
+        namespace_full_path_x_y: Namespace
+        tuple_output: Tuple[list[np.array], list[np.array], list[np.array]]
 
-        # Extract fraction of planning data for test_mpc_data
-        true_planning_data = list(zip(true_algo.exe_path.x, true_algo.exe_path.y))
-        test_points = random.sample(
-            true_planning_data, int(config.test_set_size / config.num_eval_trials)
+        namespace_full_path_x_y, tuple_output = true_algo.run_algorithm_on_f(
+            f_transition_mpc
+        )
+        list_namespace_full_paths_x_y.append(namespace_full_path_x_y)
+        list_path_lengths.append(len(namespace_full_path_x_y.x))
+        namespace_true_path: Namespace = true_algo.get_exe_path_crop()
+        list_namespace_true_path.append(namespace_true_path)
+
+        # Extract fraction of planning data for namespace_test_mpc_data
+        list_tuple_true_planning_data = list(
+            zip(true_algo.exe_path.x, true_algo.exe_path.y)
+        )
+        list_tuple_true_planning_data_test_points = random.sample(
+            list_tuple_true_planning_data,
+            int(dict_config.test_set_size / dict_config.num_eval_trials),
         )  # INFO @STELLA: here we sample random points for evaluation
-        new_x = [test_pt[0] for test_pt in test_points]
-        new_y = [test_pt[1] for test_pt in test_points]
-        test_mpc_data.x.extend(new_x)
-        test_mpc_data.y.extend(new_y)
+        list_array_test_x: list = [
+            tuple_point[0] for tuple_point in list_tuple_true_planning_data_test_points
+        ]
+        list_array_test_y: list = [
+            tuple_point[1] for tuple_point in list_tuple_true_planning_data_test_points
+        ]
+        namespace_test_mpc_data.x.extend(list_array_test_x)
+        namespace_test_mpc_data.y.extend(list_array_test_y)
 
-        # Plot groundtruth paths and print info
-        # ax_gt, fig_gt = plot_fn(true_path, ax_gt, fig_gt, domain, "samp")
-        ax_gt_1d, fig_gt_1d = plot_fn(
-            true_path, ax_gt_1d, fig_gt_1d, list_tuple_domain, "gt_1d", env=gym_env
-        )  # CHANGES @REMY: new plot function
-        returns.append(compute_return(output[2], 1))
-        stats = {"Mean Return": np.mean(returns), "Std Return:": np.std(returns)}
-        pbar.set_postfix(stats)
+        # Plot groundtruth paths and print info TODO: plot
+        plt_figure_groundtruth: plt.Figure
+        plt_axes_groundtruth: plt.Axes | np.ndarray
+        plt_figure_groundtruth, plt_axes_groundtruth = (
+            plot_ground_truth.plot_ground_truth(
+                env=env,
+                name_env=dict_config.env.name,
+                namespace_true_path=namespace_true_path,
+            )
+        )
 
-    # CHANGES @REMY: Start - Change colors of lines
-    if config.env.name in ["bacpendulum-semimarkov-v0"]:
-        list_colors = matplotlib.cm.tab20(range(config.num_eval_trials))
-        for i, ax_row in enumerate(ax_gt_1d[:2]):
-            for j, ax_col in enumerate(ax_row):
-                for k, mpl_line in enumerate(ax_col.get_lines()):
-                    mpl_line.set_color(list_colors[k])
+        list_returns.append(compute_return(tuple_output[2], 1))
+        stats = {
+            "Mean Return": np.mean(list_returns),
+            "Std Return:": np.std(list_returns),
+        }
+        tqdm_progress_bar.set_postfix(stats)
+
+        # Save groundtruth paths plot
+
+        with dumper.tf_file_writer.as_default():
+            tf.summary.image(
+                "ground_truth_1d",
+                dumper.tf_plot_to_image(figure=plt_figure_groundtruth),
+                step=id_eval_trial,
+            )
+
+    # CHANGES @REMY: Start - Change colors of lines  # TODO: see necessity?
+    # if config.env.name in ["bacpendulum-semimarkov-v0"]:
+    #     list_colors = matplotlib.cm.tab20(range(config.num_eval_trials))
+    #     for i, ax_row in enumerate(ax_gt_1d[:2]):
+    #         for j, ax_col in enumerate(ax_row):
+    #             for k, mpl_line in enumerate(ax_col.get_lines()):
+    #                 mpl_line.set_color(list_colors[k])
     # CHANGES @REMY: End
 
     # Log and dump
-    print(f"MPC test set size: {len(test_mpc_data.x)}")
-    returns = np.array(returns)
-    dumper.add("GT Returns", returns, log_mean_std=True)
-    dumper.add("Path Lengths", path_lengths, log_mean_std=True)
-    all_x = []
-    for fp in full_paths:
-        all_x += fp.x
-    all_x = np.array(all_x)
-    logging.info(f"all_x.min(axis=0) = {all_x.min(axis=0)}")
-    logging.info(f"all_x.max(axis=0) = {all_x.max(axis=0)}")
-    logging.info(f"all_x.mean(axis=0) = {all_x.mean(axis=0)}")
-    logging.info(f"all_x.var(axis=0) = {all_x.var(axis=0)}")
-    # Save groundtruth paths plot
-    if fig_gt and config.save_figures:
-        fig_gt.subtitle("Ground Truth Eval")
-        neatplot.save_figure(str(dumper.expdir / "gt"), "png", fig=fig_gt)
-        neatplot.save_figure(str(dumper.expdir / "gt_1d"), "png", fig=fig_gt_1d)
+    print(f"MPC test set size: {len(namespace_test_mpc_data.x)}")
+    array_returns = np.array(list_returns)
+    dumper.add("GT Returns", array_returns, log_mean_std=True)
+    dumper.add("Path Lengths", list_path_lengths, log_mean_std=True)
+    list_all_x = []
+    for namespace_full_path in list_namespace_full_paths_x_y:
+        list_all_x += namespace_full_path.x
+    list_all_x = np.array(list_all_x)
+    logging.info(f"all_x.min(axis=0) = {list_all_x.min(axis=0)}")
+    logging.info(f"all_x.max(axis=0) = {list_all_x.max(axis=0)}")
+    logging.info(f"all_x.mean(axis=0) = {list_all_x.mean(axis=0)}")
+    logging.info(f"all_x.var(axis=0) = {list_all_x.var(axis=0)}")
 
-    # CHANGES @REMY: Start - Add tensorboard logging
-    with dumper.tf_file_writer.as_default():
-        tf.summary.image("ground_truth_1d", dumper.tf_plot_to_image(fig_gt_1d), step=0)
-
-    return true_path, test_mpc_data
+    return list_namespace_true_path, namespace_test_mpc_data
 
 
 def get_next_point(
@@ -1436,7 +1445,7 @@ def evaluate_mpc(
     dumper,
     data,
     test_data,
-    test_mpc_data,
+    namespace_test_mpc_data,
     list_tuple_domain,
     update_fn,
     reward_fn,
@@ -1547,13 +1556,13 @@ def evaluate_mpc(
             test_y_hat = postmean_fn(test_data.x)
             random_mse = mse(test_data.y, test_y_hat)
             random_likelihood = model_likelihood(model, test_data.x, test_data.y)
-            gt_mpc_y_hat = postmean_fn(test_mpc_data.x)
+            gt_mpc_y_hat = postmean_fn(namespace_test_mpc_data.x)
             gt_mpc_mse = mse(
-                test_mpc_data.y, gt_mpc_y_hat
+                namespace_test_mpc_data.y, gt_mpc_y_hat
             )  # INFO @REMY: test_mpc_data comes from the GT trajectories
             # at the begininng
             gt_mpc_likelihood = model_likelihood(
-                model, test_mpc_data.x, test_mpc_data.y
+                model, namespace_test_mpc_data.x, namespace_test_mpc_data.y
             )
             dumper.add("Model MSE (random test set)", random_mse)
             dumper.add("Model MSE (GT MPC)", gt_mpc_mse)
