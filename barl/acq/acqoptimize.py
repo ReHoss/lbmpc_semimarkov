@@ -44,7 +44,7 @@ class AcqOptimizer(Base):
         self.acqfunction.initialize()
 
     # CHANGES @STELLA: add return_end_values as variable
-    def optimize(self, x_batch, return_end_values=False):
+    def optimize(self, x_batch):
         """
         Optimize acquisition function.
 
@@ -58,10 +58,10 @@ class AcqOptimizer(Base):
         with Timer(
             "Optimize acquisition function using random shooting", level=logging.INFO
         ):
-            if self.params.opt_str == "batch":  # INFO @REMY: this has been modified by Stella to return the best (s,a) pair
-                acq_opt, acq_val, keep_values, keep_points = self.optimize_batch(return_end_values)
+            if self.params.opt_str == "batch":
+                acq_opt, acq_val = self.optimize_batch()
 
-            return acq_opt, acq_val, keep_values, keep_points  # INFO @REMY: line modified by Stella to incorporate the new return values
+            return acq_opt, acq_val  # INFO @REMY: original code
 
     def set_acqfunction(self, acqfunction):
         """Set self.acqfunction, the acquisition function."""
@@ -70,16 +70,19 @@ class AcqOptimizer(Base):
             params = {"acq_str": "out"}
             self.acqfunction = BaxAcqFunction(params)
         else:
-            self.acqfunction = acqfunction  # @REMY: e.g. acqfunction is a MultiBaxAcqFunction
+            self.acqfunction = acqfunction  # @REMY: e.g. acqfunction
+            # is a MultiBaxAcqFunction
 
     # CHANGES @STELLA: add return_end_values as variable
     def optimize_batch(self, return_end_values=False):
         """Optimize acquisition function over self.params.x_batch."""
-        x_batch = copy.deepcopy(self.params.x_batch)  # INFO @REMY: x_batch is a list of (s,a) pairs previously sampled
+        x_batch = copy.deepcopy(self.params.x_batch)  # INFO @REMY: x_batch is a
+        # list of (s,a) pairs previously sampled
 
         # Optionally remove data.x (in acqfunction) duplicates
         if self.params.remove_x_dups:
             x_batch = self.remove_x_dups(x_batch)
+
         # Optimize self.acqfunction over x_batch
         nbatches = ceil(len(x_batch) / self.params.max_batch_size)
         acq_list = []
@@ -90,24 +93,13 @@ class AcqOptimizer(Base):
                 )
             ]
             acq_list += list(self.acqfunction(minibatch))
-        # CHANGES @STELLA: keep the acquisition values of specific range
-        list_fraction = int(len(x_batch) * self.params.keep_samples_perc)
-        if return_end_values:
-            keep_values = acq_list[-list_fraction:]
-            keep_points = x_batch[-list_fraction:]
-        
-        # CHANGES @STELLA: sort sampled points based on acquisition values
-        #sorted(graded, key=lambda x: x[0])
-        sorted_batch = [x for _, x in sorted(zip(acq_list, x_batch), reverse=True, key=lambda x: x[0])]
-        # CHANGES @STELLA: keep corresponding percentage of points
-        sorted_batch = sorted_batch[:list_fraction+1]
 
-        acq_idx = np.argmax(acq_list)  # INFO @REMY: won't be returned but used to get values and points
-        # acq_opt = x_batch[acq_idx] # (s,a) pair
+        acq_idx = np.argmax(acq_list)  # INFO @REMY: won't be returned
+        # but used to get values and points
+        acq_opt = x_batch[acq_idx] # (s,a) pair
         acq_val = acq_list[acq_idx] # EIG(s,a)
 
-        if return_end_values: return sorted_batch, acq_val, keep_values, keep_points # CHANGES @STELLA: return previous sampled points and their new eig values
-        return sorted_batch, acq_val, None, None # CHANGES @STELLA: return sorted pairs and max acq value
+        return acq_opt, acq_val
 
     def remove_x_dups(self, x_batch):
         """Remove elements of x_batch that are also in data.x (in self.acqfunction)"""
@@ -115,7 +107,8 @@ class AcqOptimizer(Base):
         # NOTE this requires self.acqfunction with model.data
         data = self.acqfunction.model.data
 
-        # NOTE this only works for data.x consisting of list-types, not for arbitrary data.x
+        # NOTE this only works for data.x consisting of list-types,
+        # not for arbitrary data.x
         for x in data.x:
             while True:
                 try:

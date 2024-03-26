@@ -29,11 +29,9 @@ def get_f_mpc(env, use_info_delta=False):
         x = np.array(x)
         obs = x[:obs_dim]
         action = x[obs_dim:]
-        # CHANGES @STELLA: in case the environment does not 
-        # support forced reset get real observation
-        # obs, _ = env.reset(obs=obs)  # INFO @REMY: Stella changed the resetting
         env.reset(obs=obs)
-        next_obs, reward, terminated, truncated, info = env.step(action)  # INFO @REMY: changed by Stella for Gymnasium
+        next_obs, reward, terminated, truncated, info = env.step(action)  # INFO @REMY:
+        # changed by Stella for Gymnasium compatibility
         if use_info_delta:
             return info["delta_obs"]
         else:

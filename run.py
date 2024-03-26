@@ -38,14 +38,14 @@ from sklearn.metrics import explained_variance_score
 
 import barl
 
-from barl.models.gpfs_gp import BatchMultiGpfsGp, TFMultiGpfsGp, MultiGpfsGp
+from barl.models.gpfs_gp import BatchMultiGpfsGp, MultiGpfsGp  # TFMultiGpfsGp,
 from barl.models.gpflow_gp import get_gpflow_hypers_from_data
 from barl.acq.acquisition import (
     MultiBaxAcqFunction,
     JointSetBaxAcqFunction,
     SumSetBaxAcqFunction,
     SumSetUSAcqFunction,
-    MCAcqFunction,
+    # MCAcqFunction,
     UncertaintySamplingAcqFunction,
     BatchUncertaintySamplingAcqFunction,
     RewardSetAcqFunction,
@@ -55,7 +55,7 @@ from barl.acq.acqoptimize import (
     PolicyAcqOptimizer,
 )
 from barl.alg.mpc import MPC
-from barl import envs, alg
+from barl import envs  # , alg
 from barl.envs.wrappers import (
     NormalizedEnv,
     make_normalized_reward_function,
@@ -71,7 +71,7 @@ from barl.util.misc_util import (
 )
 from barl.util.control_util import (
     get_f_batch_mpc,
-    get_f_batch_mpc_reward,
+    # get_f_batch_mpc_reward,
     compute_return,
     evaluate_policy,
 )
@@ -92,7 +92,6 @@ import yaml  # For config dumping
 # CHANGES @REMY: End
 
 import omegaconf
-from evaluation.metrics import MetricWizard
 
 
 from typing import Callable, TypedDict, Type, Tuple, Dict, Any
@@ -233,29 +232,32 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
     # CHANGES @REMY: Start - Check the semimarkov horizon parameter
     # Check the semimarkov horizon parameter
     assert (
-        config.alg.get("n_semimarkov_dt") is not None
-    ), "Need to specify n_semimarkov_dt in config"
+        config.alg.get("max_interdecision_epochs") is not None
+    ), "Need to specify max_interdecision_epochs in config"
     assert (
-        type(config.alg.get("n_semimarkov_dt")) is int
-    ), "n_semimarkov_dt must be an integer"
-    assert config.alg.get("n_semimarkov_dt") >= 1, "n_semimarkov_dt must be positive"
+        type(config.alg.get("max_interdecision_epochs")) is int
+    ), "max_interdecision_epochs must be an integer"
+    assert (
+        config.alg.get("max_interdecision_epochs") >= 1
+    ), "max_interdecision_epochs must be positive"
 
     # New upper bound for horizon on the environment
-    gym_env.horizon *= config.alg.n_semimarkov_dt
+    gym_env.horizon *= config.alg.max_interdecision_epochs
     # CHANGES @REMY: End
 
     # Set start obs
     if config.alg.open_loop:
         config.fixed_start_obs = True  # TODO: Remove this hack
-    array_x0: tuple
+    array_x0: np.array
     array_x0, _ = gym_env.reset() if config.fixed_start_obs else None, {}
     logging.info(f"Start obs: {array_x0}")
     # CHANGES @REMY: Start - Generate a list of start observations for evaluation
-    if not config.fixed_start_obs:  # TODO: Remove this ?
-        array_x0: np.array = gym_env.reset()[0]
     list_array_x0: list[np.array] = [
-        eval_env.reset()[0] for _ in range(config.num_eval_trials)
+        np.array(eval_env.reset()[0]) for _ in range(config.num_eval_trials)
     ]
+
+    # if not isinstance(array_x0, np.ndarray):  # TODO: Maybe put this back
+    #     raise ValueError("The environment must return a numpy array")
 
     # CHANGES @REMY: End
 
@@ -284,7 +286,7 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
     dict_test_algo_params: TypedDict(  # TODO: Move this to a separate file
         "dict_test_algo_params",
         {
-            "start_obs": np.ndarray,
+            "start_obs": np.ndarray | None,  # TODO: Maybe remove the None
             "env": EnvBARL,
             "reward_function": Callable,
             "project_to_domain": Callable,
@@ -326,7 +328,7 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
     # algo = algo_class(algo_params)
     test_algo: barl.alg.mpc.MPC = algo_class(params=dict_test_algo_params)
 
-    data: Namespace = get_initial_data(
+    namespace_data: Namespace = get_initial_data(
         config=config,
         gym_env=gym_env,
         f_transition_mpc=f_transition_mpc,
@@ -336,8 +338,9 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
 
     # Make a test set for model evalution separate from the controller
     logging.info(f"Creating test set of size {config.test_set_size}")
-    test_data: Namespace = Namespace()
-    test_data.x: list[np.array] = unif_random_sample_domain(
+    test_data: Namespace = Namespace()  # TODO: Replace by dict
+
+    test_data.x = unif_random_sample_domain(  # list[np.array]
         list_tuple_domain, config.test_set_size
     )
 
@@ -430,65 +433,72 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
     # ==============================================
 
     # Set current_obs as fixed start_obs or reset env
-    current_obs = get_start_obs(config, array_x0, gym_env)
-    dumper.add("Start Obs", current_obs)
+    # current_obs = get_start_obs(config, array_x0, gym_env)
+    array_xk: np.array = get_start_obs(  # TODO: Here stop using this function
+        dict_config=config, array_x0=array_x0, gym_env=gym_env
+    )
+    dumper.add("Start Obs", array_xk)
     current_t = 0  # INFO @REMY: current timestep of the true system
-    list_semi_markov_delays = (
-        []
-    )  # CHANGES @REMY: list of delays for the semimarkov model
-    list_semi_markov_delays.append(current_t)  # CHANGES @REMY: add the first delay
-    current_rewards = []  # TODO @STELLA: load previous rewards
+    list_semi_markov_interdecision_epochs = []
+    # CHANGES @REMY: list of delays for the semimarkov model
+    list_semi_markov_interdecision_epochs.append(current_t)
+    # CHANGES @REMY: add the first delay
+    list_current_rewards = []  # TODO @STELLA: load previous rewards
 
-    # CHANGES @STELLA: object for keeping track of evaluation metrics
-    wizard = MetricWizard(dumper)
-
-    for i in range(
-        current_iter, config.num_iters
-    ):  # CHANGES @STELLA: current_iter has been added by Stella
-        logging.info("---" * 5 + f" Start iteration i={i} " + "---" * 5)
-        logging.info(f"Length of data.x: {len(data.x)}")
-        logging.info(f"Length of data.y: {len(data.y)}")
-        time_left = gym_env.horizon - current_t
+    for iteration in range(current_iter, config.num_iters):
+        # CHANGES @STELLA: current_iter has been added by Stella
+        logging.info("---" * 5 + f" Start iteration i={iteration} " + "---" * 5)
+        logging.info(f"Length of data.x: {len(namespace_data.x)}")
+        logging.info(f"Length of data.y: {len(namespace_data.y)}")
+        time_left: int = gym_env.horizon - current_t
 
         # =====================================================
         #   Figure out what the next point to query should be
         # =====================================================
         # exe_path_list can be [] if there are no paths
         # model can be None if it isn't needed here
-        x_next, exe_path_list, model, current_obs = (
-            get_next_point(  # INFO @REMY: x_next is a list
-                # of size obs_dim + action_dim; exe_path_list is a list of
-                # Namespace (list of size n_gp) each Namespace has x, y
-                # attributes which are list having size the length of the op
-                i,
-                config,
-                test_algo,  # INFO @REMY: here is passed the MPC object used;
-                # we use the test_algo to not go to far in the time horizon
-                list_tuple_domain,
-                current_obs,
-                gym_env.action_space,
-                gp_model_class,
-                gp_model_params,
-                acqfn_class,
-                acqfn_params,
-                acqopt_class,
-                acqopt_params,
-                deepcopy(data),
-                dumper,
-                obs_dim,
-                action_dim,
-                time_left,
-                # CHANGES @STELLA: new variables
-                wizard,
-            )
+        array_state_action_next: np.array
+        list_execution_path: list[argparse.Namespace]
+        multi_gp_model: MultiGpfsGp
+        array_xk: np.array
+        interdecision_epochs: int
+
+        (
+            array_state_action_next,
+            list_execution_path,
+            multi_gp_model,
+            array_xk,
+            interdecision_epochs,
+        ) = get_next_point(  # INFO @REMY: x_next is a list
+            # of size obs_dim + action_dim; exe_path_list is a list of
+            # Namespace (list of size n_gp) each Namespace has x, y
+            # attributes which are list having size the length of the op
+            iteration=iteration,
+            dict_config=config,
+            algo=test_algo,  # INFO @REMY: here is passed the MPC object used;
+            # we use the test_algo to not go to far in the time horizon
+            list_tuple_domain=list_tuple_domain,
+            array_xk=array_xk,
+            action_space=gym_env.action_space,
+            gp_model_class=gp_model_class,
+            gp_model_params=gp_model_params,
+            acqfn_class=acqfn_class,
+            acqfn_params=acqfn_params,
+            acqopt_class=acqopt_class,
+            acqopt_params=acqopt_params,
+            namespace_data=deepcopy(namespace_data),
+            dumper=dumper,
+            obs_dim=obs_dim,
+            action_dim=action_dim,
+            time_left=time_left,
         )
 
         # ==============================================
         #   Periodically run evaluation and plot
         # ==============================================
-        if i % config.eval_frequency == 0 or i + 1 == config.num_iters:
-            if model is None and len(data.x) > 0:
-                model = gp_model_class(gp_model_params, data)
+        if iteration % config.eval_frequency == 0 or iteration + 1 == config.num_iters:
+            if multi_gp_model is None and len(namespace_data.x) > 0:
+                multi_gp_model = gp_model_class(gp_model_params, namespace_data)
             # =======================================================================
             #    Evaluate MPC:
             #       - see how the MPC policy performs on the real env
@@ -498,12 +508,12 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
             real_paths_mpc = evaluate_mpc(
                 config,
                 test_algo,
-                model,
+                multi_gp_model,
                 array_x0,
                 eval_env,
                 # f,
                 dumper,
-                data,
+                namespace_data,
                 test_data,  # INFO @REMY: test_data is a Namespace
                 # with x and y attributes, from random sampling of the domain
                 namespace_test_mpc_data,
@@ -521,187 +531,204 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
             #     - Observations
             #     - All of the above
             # ============
-            make_plots(
-                eval_plot_fn,  # CHANGES @REMY: this is the plot
-                # function for the evaluation environment
-                list_tuple_domain,
-                list_namespace_true_path,
-                data,
-                eval_env,  # CHANGES @REMY: this is the evaluation environment
-                config,
-                exe_path_list,
-                real_paths_mpc,
-                x_next,
-                dumper,
-                i,
-                list_semi_markov_delays,  # CHANGES @REMY: this is the current timestep
-                # of the true system
-            )
+            # make_plots(   # TODO: Plot !!!!
+            #     # function for the evaluation environment
+            #     list_tuple_domain,
+            #     list_namespace_true_path,
+            #     data,
+            #     eval_env,  # CHANGES @REMY: this is the evaluation environment
+            #     config,
+            #     exe_path_list,
+            #     real_paths_mpc,
+            #     x_next,
+            #     dumper,
+            #     i,
+            #     list_semi_markov_decision_epochs,
+            #     # CHANGES @REMY: this is the current timestep
+            #     # of the true system
+            # )
 
-        # for some setups we need to update the current state
-        # so that the policy / sampling happens in the right place
+        # Query function, update data
+        # try:
+        #     y_next = f_transition_mpc([array_state_action_next])[0]
+        # except TypeError:
+        #     raise NotImplementedError("This should not happen")
+
+        array_action: np.array = array_state_action_next[-action_dim:]
+
+        array_xk_next: np.array
+        reward: float
+        done: bool
+        info: dict
+
+        array_xk_next, reward, done, _, info = gym_env.step(array_action)
+        array_delta_obs: np.array = array_xk_next - array_xk
+
+        namespace_data.x.append(array_state_action_next)
+        namespace_data.y.append(array_delta_obs)
+        
+        
         if config.alg.rollout_sampling:
-            # Query function, update data
-            # try:
-            y_next = f_transition_mpc([x_next])[0]
-            # CHANGES @REMY: Start - Add the option to use the semimarkov model
-            # (will overwrite line above)
-            if getattr(config.alg, "n_semimarkov_dt", None) is not None:
-                x_next_bootstrapped = x_next  # This is what is expected by the model
-                current_obs, n_corresponding_dt = current_obs  # Just unpacking
-                list_semi_markov_delays.append(n_corresponding_dt)
-                x_next_tmp = np.concatenate([current_obs, x_next[-action_dim:]])
-                for _ in range(n_corresponding_dt - 1):
-                    # Set the actions to zero during the non-actuation period
-                    # Take action
-                    y_next_tmp = f_transition_mpc([x_next_tmp])[0]
-                    state_tmp = (
-                        y_next_tmp + x_next_tmp[:obs_dim]
-                    )  # Sum the derivative to the state
-                    x_next_tmp = np.concatenate([state_tmp, x_next[-action_dim:]])
-                # Set the actions to the actual action
-                x_next = np.concatenate([x_next_tmp[:obs_dim], x_next[-action_dim:]])
-                y_next = f_transition_mpc([x_next])[
-                    0
-                ]  # Note there is no projection to the domain here
-                # Dump the estimated vs real next state difference
-                mean_difference_state_boostrap = np.mean(
-                    np.abs(x_next_bootstrapped[:obs_dim] - x_next[:obs_dim])
-                )
-                dumper.add(
-                    "mean_difference_state_boostrap", mean_difference_state_boostrap
-                )
-                dumper.add("n_corresponding_dt", n_corresponding_dt)
-                # Log with tensorboard
-                with dumper.tf_file_writer.as_default(step=i):
-                    tf.summary.scalar(
-                        "mean_difference_state_boostrap",
-                        mean_difference_state_boostrap,
-                    )
-                    tf.summary.scalar("n_corresponding_dt", n_corresponding_dt)
-
-                # CHANGES @REMY: End
-            # except TypeError:
-            # CHANGES @REMY: Start - Stop the algorithm here
-            # raise NotImplementedError("This should not happen")
-            # CHANGES @REMY: End
-            # if the env doesn't support spot queries, simply take the action
-            # action = x_next[-action_dim:]
-            # next_obs, rew, done, info = env.step(action)
-            # y_next = next_obs - current_obs
-
-            x_next = np.array(x_next).astype(np.float64)
-            y_next = np.array(y_next).astype(np.float64)
-
-            data.x.append(x_next)
-            data.y.append(y_next)
-            dumper.add("x", x_next)
-            dumper.add("y", y_next)
-
             current_t += 1
-            delta = y_next[-obs_dim:]
+            
+        # CHANGES @REMY: Start - Add the option to use the semimarkov model
+        # (will overwrite line above)
+            array_state_action_next_bootstrapped = array_state_action_next  # This is 
+            # what is expected by the model
+            
+            list_semi_markov_interdecision_epochs.append(interdecision_epochs)
+            array_state_action_next_tmp = np.concatenate(
+                [array_xk, array_state_action_next[-action_dim:]]
+            )
+            for _ in range(interdecision_epochs - 1):
+                # Set the actions to zero during the non-actuation period
+                # Take action
+                y_next_tmp = f_transition_mpc([array_state_action_next_tmp])[0]
 
-            # CHANGES @REMY: Start - Update the current_t and cancels the previous line
-            if getattr(config.alg, "n_semimarkov_dt", None) is not None:
-                current_t -= 1  # Cancels the previous increment
-                current_t += n_corresponding_dt
-            # CHANGES @REMY: End
-
-            # current_obs will get overwritten if the episode is over
-            current_obs = update_fn(current_obs, delta)
-
-            # CHANGES @REMY: Start - Update with the real current_obs
-            if getattr(config.alg, "n_semimarkov_dt", None) is not None:
-                last_obs = x_next[:obs_dim]
-                current_obs = update_fn(last_obs, delta)
-            # CHANGES @REMY: End
-
-            try:  # CHANGES @REMY: current_obs !
-                reward = reward_function(x_next, current_obs)
-            except TypeError:
-                reward = reward_function(x_next, current_obs, current_step=current_t)
-            current_rewards.append(reward)
-            logging.info(f"Instantaneous reward state-action pair collected: {reward}")
-            if current_t >= gym_env.horizon:
-                current_return = compute_return(current_rewards, 1.0)
-                logging.info(
-                    f"Explore episode complete with return {current_return}, resetting"
+                state_tmp = (
+                    y_next_tmp + array_state_action_next_tmp[:obs_dim]
+                )  # Sum the derivative to the state
+                array_state_action_next_tmp = np.concatenate(
+                    [state_tmp, array_state_action_next[-action_dim:]]
                 )
-                dumper.add("Exploration Episode Rewards", current_rewards)
-                current_rewards = []
-                current_t = 0
-                current_obs = get_start_obs(config, array_x0, gym_env)
-                # clear action sequence if it was there
-                # (only relevant for KGRL policy, noop otherwise)
-                acqopt_params["action_sequence"] = None
+            # Set the actions to the actual action
+            array_state_action_next = np.concatenate(
+                [array_state_action_next_tmp[:obs_dim], array_state_action_next[-action_dim:]]
+            )
+            y_next = f_transition_mpc([array_state_action_next])[
+                0
+            ]  # Note there is no projection to the domain here
+            # Dump the estimated vs real next state difference
+            mean_difference_state_boostrap = np.mean(
+                np.abs(
+                    array_state_action_next_bootstrapped[:obs_dim] - array_state_action_next[:obs_dim]
+                )
+            )
+            dumper.add("mean_difference_state_boostrap", mean_difference_state_boostrap)
+            dumper.add("interdecision_epochs", interdecision_epochs)
+            # Log with tensorboard
+            with dumper.tf_file_writer.as_default(step=iteration):
+                tf.summary.scalar(
+                    "mean_difference_state_boostrap",
+                    mean_difference_state_boostrap,
+                )
+                tf.summary.scalar("interdecision_epochs", interdecision_epochs)
 
-        else:  # INFO @REMY: this is the case for the original
-            # BARL algorithm not the unrollout case
-            # INFO @STELLA: Query function, update data for original BARL
-            try:  # INFO @REMY: obs_delta is y_next in the original BARL algorithm
-                obs_delta = f_transition_mpc([x_next])[
-                    0
-                ]  # INFO @STELLA: next state delta
-                x_next = np.array(x_next).astype(np.float64)
-                obs_delta = np.array(obs_delta).astype(
-                    np.float64
-                )  # INFO @REMY: the same cast operation is done above
-                # for x_next as in the original implementation
-                next_obs = update_fn(
-                    x_next, obs_delta
-                )  # INFO @REMY: this is the next state
-                try:  # INFO @REMY: this try block has been added by Stella
-                    reward = reward_function(x_next, next_obs)
-                except TypeError:
-                    reward = reward_function(x_next, next_obs, current_step=current_t)
-                terminated = (
-                    current_t >= gym_env.horizon
-                )  # INFO @REMY: this has been added by Stella for logging purposes
-                info = {}
-                action = x_next[-action_dim:]
-            except TypeError:
-                # action = x_next[
-                #     -action_dim:
-                # ]  # INFO @REMY: this is necessary only when wanting to use step()
-                # if the env doesn't support spot queries, simply take the action
-                # next_obs, reward, terminated, truncated, info = env.step(action)
-                # obs_delta = next_obs - current_obs
-                # x_next = np.array(x_next).astype(np.float64)
-                # obs_delta = np.array(obs_delta).astype(np.float64)
-                raise TypeError("This should not happen")
-            logging.info(f"Instantaneous reward state-action pair collected: {reward}")
+            # CHANGES @REMY: End
+        # except TypeError:
+        # CHANGES @REMY: Start - Stop the algorithm here
+        # raise NotImplementedError("This should not happen")
+        # CHANGES @REMY: End
+        # if the env doesn't support spot queries, simply take the action
+        # action = x_next[-action_dim:]
+        # next_obs, rew, done, info = env.step(action)
+        # y_next = next_obs - current_obs
 
-            # Save transition to memory  # INFO @REMY: this has been added by Stella
+        array_state_action_next = np.array(array_state_action_next).astype(np.float64)
+        y_next = np.array(y_next).astype(np.float64)
 
-            data.x.append(x_next)
-            data.y.append(obs_delta)
+        namespace_data.x.append(array_state_action_next)
+        namespace_data.y.append(y_next)
+        dumper.add("x", array_state_action_next)
+        dumper.add("y", y_next)
 
-            # Save transition to buffer  # INFO @REMY: this has been added by Stella
-            dumper.add("x", x_next)
-            dumper.add("y", obs_delta)
-            dumper.add("next_obs", next_obs)
-            transition = (current_obs, action, reward, next_obs, terminated, info)
-            dumper.add("transition", transition)
+        current_t += 1
+        delta = y_next[-obs_dim:]
 
-            # Next state  # INFO @REMY: this has been added by Stella
-            logging.warning(f"-> x' {next_obs}")
-            # current_obs = next_obs  # INFO @REMY: this has been added by Stella
-            # TODO: does this affect the next iteration? this is not done
-            #  in the original implementation; looks like this is unnecessary for
-            #  the no-rollout case as this does not affect the get_next_point function
+        # CHANGES @REMY: Start - Update the current_t and cancels the previous line
+        if getattr(config.alg, "max_interdecision_epochs", None) is not None:
+            current_t -= 1  # Cancels the previous increment
+            current_t += interdecision_epochs
+        # CHANGES @REMY: End
 
-            if (
-                terminated
-            ):  # INFO @REMY: this has been added by Stella TODO: I think this is
-                # unnecessary as start_obs is never used in thet no-rollout setting
-                array_x0, _ = gym_env.reset() if config.fixed_start_obs else None, {}
+        # current_obs will get overwritten if the episode is over
+        array_xk = update_fn(array_xk, delta)
+
+        # CHANGES @REMY: Start - Update with the real current_obs
+        if getattr(config.alg, "max_interdecision_epochs", None) is not None:
+            last_obs = array_state_action_next[:obs_dim]
+            array_xk = update_fn(last_obs, delta)
+        # CHANGES @REMY: End
+
+        try:  # CHANGES @REMY: current_obs !
+            reward = reward_function(array_state_action_next, array_xk)
+        except TypeError:
+            reward = reward_function(
+                array_state_action_next, array_xk, current_step=current_t
+            )
+        list_current_rewards.append(reward)
+        logging.info(f"Instantaneous reward state-action pair collected: {reward}")
+        if current_t >= gym_env.horizon:
+            current_return = compute_return(list_current_rewards, 1.0)
+            logging.info(
+                f"Explore episode complete with return {current_return}, resetting"
+            )
+            dumper.add("Exploration Episode Rewards", list_current_rewards)
+            list_current_rewards = []
+            current_t = 0
+            array_xk = get_start_obs(config, array_x0, gym_env)
+            # clear action sequence if it was there
+            # (only relevant for KGRL policy, noop otherwise)
+            acqopt_params["action_sequence"] = None
+
+        # else:  # INFO @REMY: this is the case for the original
+        #     # BARL algorithm not the unrollout case
+        #     # INFO @STELLA: Query function, update data for original BARL
+        #     try:  # INFO @REMY: obs_delta is y_next in the original BARL algorithm
+        #         obs_delta = f_transition_mpc([array_state_action_next])[
+        #             0
+        #         ]  # INFO @STELLA: next state delta
+        #         array_state_action_next = np.array(array_state_action_next).astype(
+        #             np.float64
+        #         )
+        #         obs_delta = np.array(obs_delta).astype(
+        #             np.float64
+        #         )  # INFO @REMY: the same cast operation is done above
+        #         # for x_next as in the original implementation
+        #         next_obs = update_fn(
+        #             array_state_action_next, obs_delta
+        #         )  # INFO @REMY: this is the next state
+        #         try:  # INFO @REMY: this try block has been added by Stella
+        #             reward = reward_function(array_state_action_next, next_obs)
+        #         except TypeError:
+        #             reward = reward_function(
+        #                 array_state_action_next, next_obs, current_step=current_t
+        #             )
+        #         terminated = (
+        #             current_t >= gym_env.horizon
+        #         )  # INFO @REMY: this has been added by Stella for logging purposes
+        #         info = {}
+        #         action = array_state_action_next[-action_dim:]
+        #     except TypeError:
+        #         # action = x_next[
+        #         #     -action_dim:
+        #         # ]  # INFO @REMY: this is necessary only when wanting to use step()
+        #         # if the env doesn't support spot queries, simply take the action
+        #         # next_obs, reward, terminated, truncated, info = env.step(action)
+        #         # obs_delta = next_obs - array_xk
+        #         # x_next = np.array(x_next).astype(np.float64)
+        #         # obs_delta = np.array(obs_delta).astype(np.float64)
+        #         raise TypeError("This should not happen")
+        #     logging.info(f"Instantaneous reward state-action pair collected: {reward}")
+        #
+        #     # Save transition to memory  # INFO @REMY: this has been added by Stella
+        #
+        #     data.x.append(array_state_action_next)
+        #     data.y.append(obs_delta)
+        #
+        #     # TODO: does this affect the next iteration? this is not done
+        #     #  in the original implementation; looks like this is unnecessary for
+        #     #  the no-rollout case as this does not affect the get_next_point function
+        #
+        #     # if (terminated):
+        #         # INFO @REMY: this has been added by Stella TODO: I think this is
+        #         # unnecessary as start_obs is never used in the no-rollout setting
+        #         # array_x0, _ = gym_env.reset() if config.fixed_start_obs else None, {}
 
         # Dumper save
         dumper.save()
         plt.close("all")
-    logging.info("Job finished")  # INFO @REMY: this has been added by Stella
-
-    pass
+        print(f"End of iteration {iteration}\n")
 
 
 def configure(config):
@@ -772,7 +799,7 @@ def get_env(config: omegaconf.DictConfig):
                 norm_env=gym_env,
                 reward_function=reward_function,
             )
-        plot_fn = make_normalized_plot_fn(gym_env, plot_fn)  # TODO: remove this
+        # plot_fn = make_normalized_plot_fn(gym_env, plot_fn)  # TODO: remove this
     if config.alg.learn_reward:
         raise NotImplementedError("# CHANGES @REMY: this is not implemented")
         # f = get_f_batch_mpc_reward(env, use_info_delta=config.teleport)
@@ -794,26 +821,29 @@ def get_initial_data(
     list_tuple_domain: list[tuple[float, float]],
     dumper: Dumper,
 ) -> Namespace:  # @REMY: the list format is required for "batch" functions
-    data: argparse.Namespace = Namespace()
+    namespace_data: argparse.Namespace = Namespace()
     # TODO: WARNING: the initial point is sampled again
     if config.sample_init_initially:
-        data.x: list[np.array] = [
+        # @REMY: Below data.x type is list[np.array]
+        namespace_data.x = [
             np.concatenate(
                 [gym_env.reset()[0], gym_env.action_space.sample()]
             )  # INFO @REMY: the seed is already fixed before
             for _ in range(config.num_init_data)
         ]
     else:
-        data.x = unif_random_sample_domain(list_tuple_domain, config.num_init_data)
+        namespace_data.x = unif_random_sample_domain(
+            list_tuple_domain, config.num_init_data
+        )
 
-    data.y = f_transition_mpc(data.x)
+    namespace_data.y = f_transition_mpc(namespace_data.x)
 
-    dumper.extend("x", data.x)
-    dumper.extend("y", data.y)
+    dumper.extend("x", namespace_data.x)
+    dumper.extend("y", namespace_data.y)
 
     # Plot initial data (TODO: PLOT refactor plotting)
 
-    return data
+    return namespace_data
 
 
 def get_model(
@@ -900,9 +930,11 @@ def get_acq_fn(
             else:
                 acqfn_class = SumSetBaxAcqFunction
                 # CHANGES @REMY: Start - Add the option to use the semimarkov model
-                if getattr(config.alg, "n_semimarkov_dt", None) is not None:
+                if getattr(config.alg, "max_interdecision_epochs", None) is not None:
                     acqfn_class = MultiBaxAcqFunction
-                    acqfn_params["n_semimarkov_dt"] = config.alg.n_semimarkov_dt
+                    acqfn_params["max_interdecision_epochs"] = (
+                        config.alg.max_interdecision_epochs
+                    )
                 # CHANGES @REMY: End
     return acqfn_class, acqfn_params
 
@@ -939,10 +971,12 @@ def get_acq_opt(
         acqopt_class = PolicyAcqOptimizer  # INFO @REMY Standard original TIP
         # (TIP = Trajectory Information Planning)
         # CHANGES @REMY: Start - Add the option to use the semimarkov model
-        if getattr(config.alg, "n_semimarkov_dt", None) is not None:
+        if getattr(config.alg, "max_interdecision_epochs", None) is not None:
             acqopt_class = AcqOptimizer  # INFO @REMY: this allows
             # to use a batch of well-chosen candidates
-            acqopt_params["n_semimarkov_dt"] = config.alg.n_semimarkov_dt
+            acqopt_params["max_interdecision_epochs"] = (
+                config.alg.max_interdecision_epochs
+            )
         # CHANGES @REMY: End
     else:
         raise NotImplementedError("Only rollout sampling is supported")
@@ -952,7 +986,6 @@ def get_acq_opt(
 def fit_hypers(
     config,
     fit_data,
-    plot_fn,
     list_tuple_domain,
     expdir,
     obs_dim,
@@ -981,15 +1014,15 @@ def fit_hypers(
         logging.info("\n" + "=" * 60 + "\n Fitting Hyperparameters\n" + "=" * 60)
         logging.info(f"Number of observations in fit_data: {len(fit_data.x)}")
 
-        # Plot hyper fitting data
-        ax_obs_hyper_fit, fig_obs_hyper_fit = plot_fn(
-            path=None, domain=list_tuple_domain
-        )
-        if ax_obs_hyper_fit is not None and config.save_figures:
-            plot(ax_obs_hyper_fit, fit_data.x, "o", color="k", ms=1)
-            neatplot.save_figure(
-                str(expdir / "mpc_obs_hyper_fit"), "png", fig=fig_obs_hyper_fit
-            )
+        # Plot hyper fitting data  # TODO: improve this
+        # ax_obs_hyper_fit, fig_obs_hyper_fit = plot_fn(
+        #     path=None, domain=list_tuple_domain
+        # )
+        # if ax_obs_hyper_fit is not None and config.save_figures:
+        #     plot(ax_obs_hyper_fit, fit_data.x, "o", color="k", ms=1)
+        #     neatplot.save_figure(
+        #         str(expdir / "mpc_obs_hyper_fit"), "png", fig=fig_obs_hyper_fit
+        #     )
 
         # Perform hyper fitting
         gp_params_list = []
@@ -1048,7 +1081,7 @@ def execute_gt_mpc(
     env: EnvBARL,
     f_transition_mpc: Callable,
     list_array_x0: list[np.array],
-) -> Tuple[list[Namespace], Namespace]:
+) -> Tuple[list[argparse.Namespace], Namespace]:
 
     # Assert the number of trials is strictly positive
     assert (
@@ -1157,282 +1190,267 @@ def execute_gt_mpc(
 
 
 def get_next_point(
-    i,
-    config,
-    algo,
-    list_tuple_domain,
-    current_obs,
-    action_space,
-    gp_model_class,
-    gp_model_params,
-    acqfn_class,
-    acqfn_params,
-    acqopt_class,
-    acqopt_params,
-    data,
-    dumper,
-    obs_dim,
-    action_dim,
-    time_left,
-    # CHANGES @STELLA: new variables
-    wizard,
-):
-    # CHANGES @STELLA: declare global
-    global _sampling_pool
-    global old_eig_points, old_point, old_sample_points
-
-    exe_path_list = []
-    model = None
-    if (len(data.x) == 0) and (
-        not config.alg.rollout_sampling
-    ):  # INFO @REMY: In general the default BARL ensures this is false
-        # CHANGES @REMY: skip for the new rollout sampling case
+    iteration: int,
+    dict_config: omegaconf.DictConfig,
+    algo: barl.alg.mpc.MPC,
+    list_tuple_domain: list[tuple[float, float]],
+    array_xk: np.array,
+    action_space: gymnasium.spaces.Box,
+    gp_model_class: Type[barl.models.gpfs_gp.MultiGpfsGp],
+    gp_model_params: dict,
+    acqfn_class: Type[barl.acq.acquisition.MultiBaxAcqFunction],
+    acqfn_params: dict,
+    acqopt_class: Type[barl.acq.acqoptimize.AcqOptimizer],
+    acqopt_params: dict,
+    namespace_data: argparse.Namespace,
+    dumper: barl.util.misc_util.Dumper,
+    obs_dim: int,
+    action_dim: int,
+    time_left: int,
+) -> Tuple[
+    np.array,
+    list[argparse.Namespace],
+    barl.models.gpfs_gp.MultiGpfsGp | None,
+    np.array,
+    float,
+]:
+    multi_gp_model: barl.models.gpfs_gp.MultiGpfsGp | None = None
+    list_execution_path: list = []
+    if (len(namespace_data.x) == 0) and (not dict_config.alg.rollout_sampling):
+        # TODO: remove second condition above ?
+        multi_gp_model: MultiGpfsGp = gp_model_class(gp_model_params, namespace_data)
+        # INFO @REMY: In the classical BARL case, the state-action pairs are sampled
+        # Hence, a random initial action is sampled
+        interdecision_epochs: int = 1
         return (
-            np.concatenate([current_obs, action_space.sample()]),
-            exe_path_list,
-            model,
-            current_obs,
+            np.concatenate([array_xk, action_space.sample()]),
+            list_execution_path,
+            multi_gp_model,
+            array_xk,
+            interdecision_epochs,
         )
-    if config.alg.use_acquisition:
-        model = gp_model_class(
-            gp_model_params, data
-        )  # INFO @REMY: something like barl.models.gpfs_gp.BatchMultiGpfsGp;
+    if dict_config.alg.use_acquisition:
+
+        # INFO @REMY: --- First part: sample the candidate points ---
+
+        multi_gp_model: MultiGpfsGp = gp_model_class(gp_model_params, namespace_data)
+        # INFO @REMY: something like barl.models.gpfs_gp.BatchMultiGpfsGp;
         # data is the dataset D = {(x_i, y_i)}_{i=1}^n we carefullly choose
         # Set and optimize acquisition function
         acqfn_base = acqfn_class(
-            params=acqfn_params, model=model, algorithm=algo
-        )  # INFO @REMY: e.g. MultiBaxAcqFunction, I presume
+            params=acqfn_params, model=multi_gp_model, algorithm=algo
+        )
+        # INFO @REMY: e.g. MultiBaxAcqFunction
         # Multi comes from the number of dimension of the GP model
-        if config.num_samples_mc != 1:  # INFO @REMY: here it is possible
+
+        if dict_config.num_samples_mc != 1:
+            # INFO @REMY: here it is possible
             # to make an ensemble of acquisition functions
-            acqfn = MCAcqFunction(acqfn_base, {"num_samples_mc": config.num_samples_mc})
+            raise NotImplementedError
+            # acqfn = MCAcqFunction(acqfn_base,
+            # {"num_samples_mc": config.num_samples_mc})
         else:
             acqfn = acqfn_base
+
         acqopt_params["time_left"] = time_left
-        acqopt = acqopt_class(
-            params=acqopt_params
-        )  # INFO @REMY: acqopt_class is AcqOptimizer, acqopt_params is a dict,
+        acqopt: barl.acq.acqoptimize.AcqOptimizer = acqopt_class(params=acqopt_params)
+        # INFO @REMY: acqopt_class is AcqOptimizer, acqopt_params is a dict,
         # as the object has no __init__ function defined,
-        # the parent constructor (Base) is called
-        acqopt.initialize(acqfn)  # INFO @STELLA: define acquisition function acqfn;
+        # the parent constructor (Base) is called below
+        acqopt.initialize(acqfn)
+        # INFO @STELLA: define acquisition function acqfn;
         # a copy of algorithm=algo above is initialized in acqfn
-        # INFO @STELLA: random pairs sampling here!!!
-        if (
-            config.alg.rollout_sampling or config.alg.simple_rollout_sampling
-        ):  # INFO @REMY: config.alg.simple_rollout_sampling added by Stella
-            if current_obs is not None:  # INFO @REMY: In this part of the code,
-                # it is supposed that the current state
-                # is fixed and we sample only the action
-                # x_test = [
-                #     np.concatenate([current_obs, action_space.sample()])
-                # INFO @REMY: TODO: watch out, the seed is not fixed here
-                #     for _ in range(config.n_rand_acqopt)
-                # ]
-                # CHANGES @REMY: Start - Sample points for different time horizons
-                x_test = sample_forward_points(
+
+        # INFO @STELLA: random pairs sampling here!
+        if dict_config.alg.rollout_sampling:
+            # INFO @REMY: In this part of the code,
+            # it is supposed that the current state
+            # is fixed and we query only the action
+
+            # x_test = [
+            #     np.concatenate([array_xk, action_space.sample()])
+            # INFO @REMY: TODO: watch out, the seed is not fixed here
+            #     for _ in range(config.n_rand_acqopt)
+            # ]
+
+            # CHANGES @REMY: Start - Sample points for different time horizons
+            list_array_candidate_state_actions: list[np.array] = (
+                sample_forward_points(  # TODO: what is this function?
                     acqopt=acqopt,
-                    current_obs=current_obs,
-                    n_rand_acqopt=config.n_rand_acqopt,
-                    n_semimarkov_dt=config.alg.n_semimarkov_dt,
+                    array_xk=array_xk,
+                    n_rand_acqopt=dict_config.n_rand_acqopt,
+                    max_interdecision_epochs=dict_config.alg.max_interdecision_epochs,
                 )
-                # CHANGES @REMY: End
-            else:
-                x_test = None
-        elif (
-            config.alg.eig and config.sample_exe
-        ):  # INFO @REMY: this might mean sample only the full execution path ?
-            all_x = []
+            )
+            # CHANGES @REMY: End
+
+        elif dict_config.alg.eig and dict_config.sample_exe:
+            logging.info("Sampling from the execution paths")
+            # INFO @REMY: this might mean sample only the full execution path ?
+            list_array_all_state_action: list[np.array] = []
             for path in acqfn.exe_path_full_list:
-                all_x += path.x
-            n_path = int(
-                config.n_rand_acqopt * config.path_sampling_fraction
-            )  # INFO @REMY: config.n_rand_acqopt
+                list_array_all_state_action += path.x
+            # INFO @REMY: config.n_rand_acqopt
             # is the number of candidates for EIG optimization
-            n_rand = config.n_rand_acqopt - n_path
-            # INFO @STELLA: sample (s,a) from current trajectory only
-            logging.info("Current trajectory sampling")
-            x_test = random.sample(
-                all_x, n_path
-            )  # INFO @REMY: sample n_path points from all_x
-            x_test = np.array(x_test)
-            x_test += (
-                np.random.randn(*x_test.shape) * 0.01
-            )  # INFO @REMY: add some noise to the sampled points
-            x_test = list(x_test)
-            x_test += unif_random_sample_domain(
-                list_tuple_domain, n=n_rand
-            )  # INFO @REMY: add n_rand points sampled uniformly
+            n_path: int = int(  # INFO @REMY: n_path is the number of points sampled
+                dict_config.n_rand_acqopt * dict_config.path_sampling_fraction
+            )
+            n_rand = dict_config.n_rand_acqopt - n_path
+
+            # INFO @REMY: n_rand is the number of points sampled randomly this time
+
+            # INFO @REMY: sample n_path points (x, a) from list_array_all_state_action
+            list_array_candidate_state_actions: list[np.array] = random.sample(
+                list_array_all_state_action, n_path
+            )
+            matrix_candidate_state_actions: np.array = np.array(
+                list_array_candidate_state_actions
+            )
+            # INFO @REMY: add some noise to the sampled points
+            matrix_candidate_state_actions += (
+                np.random.randn(*matrix_candidate_state_actions.shape) * 0.01
+            )
+            list_array_candidate_state_actions: list[np.array] = list(
+                matrix_candidate_state_actions
+            )
+
+            # INFO @REMY: add n_rand points sampled uniformly
             # from the domain in order to have n_rand_acqopt points in total
             # Store returns of posterior samples
-            posterior_returns = [
+            list_array_candidate_state_actions += unif_random_sample_domain(
+                list_tuple_domain, n=n_rand
+            )
+
+            list_posterior_returns: list[float] = [
                 compute_return(output[2], 1) for output in acqfn.output_list
             ]
             dumper.add(
                 "Posterior Returns",
-                posterior_returns,
-                verbose=(i % config.eval_frequency == 0),
+                list_posterior_returns,
+                verbose=(iteration % dict_config.eval_frequency == 0),
             )
-        # CHANGES @STELLA: added new setting for sampling points
-        elif config.alg.sampling_pool:
-            logging.info("Sampling pool")
-            size = len(_sampling_pool)
-            if config.alg.compare_mode:
-                logging.info("COMPARE MODE")
-                try:
-                    x_test = get_default_samples(
-                        iteration=i, n=config.n_rand_acqopt - size
-                    )
-                except FileNotFoundError as err:
-                    logging.info(err)
-                    logging.info(f"Uniform Sampling from scratch")
-                    x_test = unif_random_sample_domain(
-                        list_tuple_domain, n=config.n_rand_acqopt - size
-                    )
-            else:
-                x_test = unif_random_sample_domain(
-                    list_tuple_domain, n=config.n_rand_acqopt - size
-                )
-            x_test.extend(_sampling_pool)
-            dumper.add("Sampled Data", x_test, verbose=False)
-        else:  # INFO @REMY: this is the classic BARL uniform sampling case
-            # INFO @STELLA: uniform sampling
-            logging.info("Uniform Sampling")
-            if config.alg.compare_mode:
-                logging.info("COMPARE MODE")
-                try:
-                    x_test = get_default_samples(iteration=i, n=config.n_rand_acqopt)
-                except FileNotFoundError as err:
-                    logging.info(err)
-                    logging.info(f"Uniform Sampling from scratch")
-                    x_test = unif_random_sample_domain(
-                        list_tuple_domain, n=config.n_rand_acqopt
-                    )
-                    dumper.add("Sampled Data", x_test, verbose=False)
-            else:
-                x_test = unif_random_sample_domain(
-                    list_tuple_domain, n=config.n_rand_acqopt
-                )
-            dumper.add("Sampled Data", x_test, verbose=False)
-        try:
-            exe_path_list = (
-                acqfn.exe_path_list
-            )  # INFO @REMY: list of Namespace with execution paths
-            # of the best trajectories
-        except AttributeError:
-            logging.debug(
-                "exe_path_list not found."
-                " This is normal for steps where they aren't sampled"
-            )
-        # INFO @STELLA: get next point for D, timer here?
-        # CHANGES @STELLA: configuration for returning more than one pairs
-        if config.alg.simple_rollout_sampling:  # CHANGES @REMY: Added the condition
-            x_nexts, acq_val, new_eig_points, new_sample_points = acqopt.optimize(
-                x_test, return_end_values=True
-            )  # x_test not used anymore
-            x_next = x_nexts[0]  # first result as next point
-            if len(x_nexts) > 1:
-                _sampling_pool = x_nexts[1:]  # rest of points as sampling pool
-            if len(old_eig_points) > 0:
-                wizard.register_eig_evolution(
-                    acq_val,
-                    old_eig_points,
-                    new_eig_points,
-                    old_point,
-                    old_sample_points,
-                )
-
-            old_eig_points = new_eig_points
-            old_sample_points = new_sample_points
-            old_point = x_next
-        elif (
-            config.alg.rollout_sampling
-        ):  # CHANGES @REMY: here the vanilla acqopt PolicyAcqOptimizer is used,
-            # CHANGES @REMY: Start - Add the option to use the semimarkov model
-            if getattr(config.alg, "n_semimarkov_dt", None) is not None:
-                x_nexts, acq_val, _, _ = acqopt.optimize(x_test)
-                x_next: np.array = x_nexts[0]
-                index_best_element = int(
-                    np.where((np.array(x_test) == x_next).all(axis=1))[0]
-                )
-                # The x_text is uniformly divided
-                # in n_rand_acqopt // n_semimarkov_dt parts, for each of the n_dt
-                corresponding_n_dt = (
-                    index_best_element
-                    // (config.n_rand_acqopt // config.alg.n_semimarkov_dt)
-                    + 1
-                )
-            else:
-                x_next, acq_val = acqopt.optimize(
-                    x_test
-                )  # CHANGES @REMY: (not modified by Stella), hence classic BARL code
-            # CHANGES @REMY: End
         else:
-            x_nexts, acq_val, _, _ = acqopt.optimize(
-                x_test
-            )  # x_test not used anymore  # INFO @REMY: warning only
-            x_next = x_nexts[0]
+            # INFO @REMY: this is the classic BARL uniform sampling case
+            logging.info("Uniform Sampling")
+
+            list_array_candidate_state_actions = unif_random_sample_domain(
+                list_tuple_domain, n=dict_config.n_rand_acqopt
+            )
+            dumper.add(
+                "Sampled Data", list_array_candidate_state_actions, verbose=False
+            )
+        list_execution_path = acqfn.exe_path_list
+
+        # try:
+        #     list_execution_path = acqfn.exe_path_list
+        # INFO @REMY: list of Namespace with execution paths
+        # of the best trajectories
+        # except AttributeError:
+        #     logging.debug(
+        #         "exe_path_list not found."
+        #         " This is normal for steps where they aren't sampled"
+        #     )
+
+        # INFO @REMY: --- Second part: optimize the acquisition function ---
+
+        # CHANGES @REMY: here the vanilla acqopt PolicyAcqOptimizer is used
+        # CHANGES @REMY: Start - Add the option to use the semimarkov model
+        array_state_action_next: np.array
+        # Shape of matrix_candidate_state_actions: (n_rand_acqopt, obs_dim + action_dim)
+        matrix_candidate_state_actions: np.array = np.array(
+            list_array_candidate_state_actions
+        )
+        array_state_action_next, acq_val = acqopt.optimize(
+            list_array_candidate_state_actions
+        )
+        # Extract the index of the best element
+        array_bool_state_action_next: np.array = np.all(
+            (matrix_candidate_state_actions == array_state_action_next), axis=1
+        )
+        index_best_element = int(np.where(array_bool_state_action_next)[0])
+        # The list_array_candidate_state_actions is uniformly divided
+        # in n_rand_acqopt // max_interdecision_epochs parts, for each of the n_dt
+        max_interdecision_epochs: int = dict_config.alg.max_interdecision_epochs
+        n_rand_acqopt: int = dict_config.n_rand_acqopt
+        interdecision_epochs = (
+            index_best_element // (n_rand_acqopt // max_interdecision_epochs) + 1
+        )
+        # CHANGES @REMY: End
+
         # CHANGES @STELLA: keep track of eig evolution
         dumper.add("Acquisition Function Value", acq_val)
+
         # CHANGES @REMY: Add tensorboard logging
-        with dumper.tf_file_writer.as_default(step=i):
+        with dumper.tf_file_writer.as_default(step=iteration):
             tf.summary.scalar("eig", acq_val)
 
-        if config.alg.kgrl or config.alg.kg_policy:
+        if dict_config.alg.kgrl or dict_config.alg.kg_policy:
             dumper.add("Bayes Risks", acqopt.risk_vals, verbose=False)
             dumper.add("Policy Returns", acqopt.eval_vals, verbose=False)
             dumper.add("Policy Return ndata", acqopt.eval_steps, verbose=False)
-            if i % config.alg.policy_lifetime == 0:
+            if iteration % dict_config.alg.policy_lifetime == 0:
                 # reinitialize policies
                 acqopt_params["policies"] = acqopt_class.get_policies(
-                    num_x=config.n_rand_acqopt,
-                    num_sprime_samps=config.alg.num_sprime_samps,
+                    num_x=dict_config.n_rand_acqopt,
+                    num_sprime_samps=dict_config.alg.num_sprime_samps,
                     obs_dim=obs_dim,
                     action_dim=action_dim,
                     hidden_layer_sizes=[128, 128],
                 )
-        if config.alg.rollout_sampling:
-            # this relies on the fact that in the KGPolicyAcqOptimizer,
-            # advance action sequence is called
-            # as part of optimize() which sets this up for copying back
-            try:
-                # here both KG Policy and Policy acqopts have an action sequence
-                # but only Policy has actions_until_plan
-                acqopt_params["action_sequence"] = acqopt.params.action_sequence
-                acqopt_params["actions_until_plan"] = acqopt.params.actions_until_plan
-            except AttributeError:
-                pass
 
-    elif (
-        config.alg.use_mpc
-    ):  # INFO @REMY: it looks like that part only uses MPC on the GP model
-        model = gp_model_class(gp_model_params, data)
+        # if config.alg.rollout_sampling:  # @REMY: this is from Mehta
+        # this relies on the fact that in the KGPolicyAcqOptimizer,
+        # advance action sequence is called
+        # as part of optimize() which sets this up for copying back
+        # try:
+        # here both KG Policy and Policy acqopts have an action sequence
+        # but only Policy has actions_until_plan
+        # acqopt_params["action_sequence"] = acqopt.params.action_sequence
+        # acqopt_params["actions_until_plan"] = acqopt.params.actions_until_plan
+        # except AttributeError:
+        #     pass  # TODO: improve this if necessary
+
+    elif dict_config.alg.use_mpc:
+        # INFO @REMY: it looks like that part only uses MPC on the GP model
+        multi_gp_model: MultiGpfsGp = gp_model_class(gp_model_params, namespace_data)
         algo.initialize()
 
-        policy = partial(
-            algo.execute_mpc, f=make_postmean_fn(model, use_tf=config.alg.gd_opt)
+        policy_function: Callable = partial(
+            algo.execute_mpc,
+            f=make_postmean_fn(multi_gp_model, use_tf=dict_config.alg.gd_opt),
         )
-        action = policy(current_obs)
-        x_next = np.concatenate([current_obs, action])
-    else:  # INFO @REMY: this is the random sampling case
-        x_next = unif_random_sample_domain(list_tuple_domain, 1)[0]
+        array_action_scaled: np.array = policy_function(array_xk)
+        array_state_action_next: np.array = np.concatenate(
+            [array_xk, array_action_scaled]
+        )
+        interdecision_epochs: int = 1
+    else:  # INFO @REMY: this is a fully random sampling case
+        logging.warning(
+            "Next tuple is sampled uniformly from the state-action space"
+            "since no config.alg.use_acquisition"
+            " or config.alg.use_mpc is set."
+        )
+        list_xk_next: list[float] = unif_random_sample_domain(list_tuple_domain, 1)[0]
+        array_state_action_next: np.array = np.array(list_xk_next)
+        interdecision_epochs: int = 1
 
-    if (
-        config.alg.rollout_sampling or config.alg.simple_rollout_sampling
-    ) and current_obs is not None:
-        # CHANGES @REMY: Start - Add the option to use the semimarkov model
-        if getattr(config.alg, "n_semimarkov_dt", None) is not None:
-            return x_next, exe_path_list, model, (current_obs, corresponding_n_dt)
-        else:
+    if dict_config.alg.rollout_sampling and array_xk is not None:
+        # INFO @REMY: this is a sanity check
+        if getattr(dict_config.alg, "max_interdecision_epochs") == 1:
             assert np.allclose(
-                current_obs, x_next[:obs_dim]  # INFO @REMY: sanity check
+                array_xk, array_state_action_next[:obs_dim]  # INFO @REMY: sanity check
             ), (
-                "For rollout cases,"
-                " we can only give queries which are from the current state"
+                "For rollout cases we can only give queries"
+                " which are from the current state"
             )  # NOQA
-        # CHANGES @REMY: End
-    if current_obs is None:
-        current_obs = x_next[:obs_dim].copy()
-    return x_next, exe_path_list, model, current_obs
+
+    return (
+        array_state_action_next,
+        list_execution_path,
+        multi_gp_model,
+        array_xk,
+        interdecision_epochs,
+    )
 
 
 def evaluate_mpc(
@@ -1443,7 +1461,7 @@ def evaluate_mpc(
     env,  # INFO @REMY: env is passed to evaluate_policy and stepped through
     # f,
     dumper,
-    data,
+    namespace_data,
     test_data,
     namespace_test_mpc_data,
     list_tuple_domain,
@@ -1545,7 +1563,7 @@ def evaluate_mpc(
         real_returns = np.array(real_returns)
         algo.old_exe_paths = []
         dumper.add("Eval Returns", real_returns, log_mean_std=True)
-        dumper.add("Eval ndata", len(data.x))
+        dumper.add("Eval ndata", len(namespace_data.x))
         current_mpc_mse = np.mean(mses)
         # this is commented out because I don't feel liek reimplementing it
         # for the Bayes action
@@ -1571,7 +1589,9 @@ def evaluate_mpc(
             dumper.add("Model Likelihood (GT MPC)", gt_mpc_likelihood)
 
         # CHANGES @REMY: Start - Add tensorboard logging
-        iteration = len(data.x)  # INFO @REMY: proxy to get the current iteration
+        iteration = len(
+            namespace_data.x
+        )  # INFO @REMY: proxy to get the current iteration
         with dumper.tf_file_writer.as_default(step=iteration):
             tf.summary.scalar("Mean Return", np.mean(real_returns))
             tf.summary.scalar("Std Return", np.std(real_returns))
@@ -1585,13 +1605,15 @@ def evaluate_mpc(
     return real_paths_mpc
 
 
-def get_start_obs(config, start_obs, env):
-    if config.fixed_start_obs:  # INFO @REMY: next state delta
-        return start_obs.copy()
-    elif config.alg.choose_start_state:
+def get_start_obs(
+    dict_config: omegaconf.DictConfig, array_x0: np.array, gym_env: EnvBARL
+) -> np.array:
+    if dict_config.fixed_start_obs:  # INFO @REMY: next state delta
+        return array_x0.copy()
+    elif dict_config.alg.choose_start_state:
         return None
     else:
-        return env.reset()[0]
+        return gym_env.reset()[0]
 
 
 def make_plots(
@@ -1601,12 +1623,12 @@ def make_plots(
     data,
     env,
     config,
-    exe_path_list,
+    list_execution_path,
     real_paths_mpc,
     x_next,
     dumper,
     i,
-    list_semi_markov_delays,
+    list_semi_markov_interdecision_epochs,
 ):
     if len(data.x) == 0:
         return
@@ -1651,7 +1673,7 @@ def make_plots(
         env,
         color="k",
         ms=1,
-        list_semi_markov_delays=list_semi_markov_delays,
+        list_semi_markov_interdecision_epochs=list_semi_markov_interdecision_epochs,
     )  # INFO @REMY: write above the axes  # CHANGES @REMY:
     # add the ennvironment name to the plot function
 
@@ -1659,7 +1681,7 @@ def make_plots(
     for (
         path
     ) in (
-        exe_path_list
+        list_execution_path
     ):  # INFO @REMY: here we plot the m state trajectories for each GP_i;
         # calling multiple time to superimpose the plots
         # ax_all, fig_all = plot_fn(path, ax_all, fig_all, domain, "samp")
@@ -1771,57 +1793,64 @@ def get_default_samples(iteration: int, n: int) -> list:
 
 # CHANGES @REMY: Start - Add function to sample forward points
 def sample_forward_points(
-    acqopt, current_obs: np.ndarray, n_rand_acqopt: int, n_semimarkov_dt: int
-):
+    acqopt: barl.acq.acqoptimize.AcqOptimizer,
+    array_xk: np.ndarray,
+    n_rand_acqopt: int,
+    max_interdecision_epochs: int,
+) -> list[np.ndarray]:
     """
     Sample points from the forward path distribution
     """
     # Sample initial (x, a) pairs
-    env = acqopt.acqfunction.algorithm.params.env
-    n_initial_points = n_rand_acqopt // n_semimarkov_dt
-    dim_state = env.observation_space.low.size
-    dim_action = env.action_space.low.size
-    dim_state_action = dim_state + dim_action
-    n_gp_samples = acqopt.acqfunction.params.n_path
+    gym_env: EnvBARL = acqopt.acqfunction.algorithm.params.env
 
-    ndarray_trajectory = np.zeros(
-        (n_gp_samples, n_semimarkov_dt, n_initial_points, dim_state_action)
+    assert isinstance(gym_env.observation_space, gymnasium.spaces.Box)
+    assert isinstance(gym_env.action_space, gymnasium.spaces.Box)
+
+    n_initial_points: int = n_rand_acqopt // max_interdecision_epochs
+    dim_state: int = gym_env.observation_space.low.size
+    dim_action: int = gym_env.action_space.low.size
+    dim_state_action: int = dim_state + dim_action
+    n_gp_samples: int = acqopt.acqfunction.params.n_path
+
+    ndarray_trajectory: np.array = np.zeros(
+        (n_gp_samples, max_interdecision_epochs, n_initial_points, dim_state_action)
     )
 
-    matrix_initial_actions = np.array(
-        [env.action_space.sample() for _ in range(n_initial_points)]
+    matrix_initial_actions: np.array = np.array(
+        [gym_env.action_space.sample() for _ in range(n_initial_points)]
     )
-    matrix_initial_obs = np.tile(current_obs, (n_initial_points, 1))
-    matrix_initial_points = np.concatenate(
+    matrix_initial_obs: np.array = np.tile(array_xk, (n_initial_points, 1))
+    matrix_initial_points: np.array = np.concatenate(
         [matrix_initial_obs, matrix_initial_actions], axis=1
     )
 
     # ndarray prefix means 4D tensor
 
-    n_dt = 0
+    n_dt: int = 0
     ndarray_trajectory[:, n_dt, :, :] = (
         matrix_initial_points  # will be broadcasted to the whole tensor
     )
-    for n_dt in range(1, n_semimarkov_dt):
+    for n_dt in range(1, max_interdecision_epochs):
         # Get the last state of the previous step
-        ndarray3d_temp = ndarray_trajectory[:, n_dt - 1, :, :].copy()
+        ndarray3d_temp: np.array = ndarray_trajectory[:, n_dt - 1, :, :].copy()
         # Set to constant actions, the below instruction broadcasts
         # the matrix to the n_gp_samples dimension
         ndarray3d_temp[:, :, dim_state:] = (
             matrix_initial_actions  # (n_gp_samples, n_initial_points, dim_state_action)
         )
-        nested_list_step_temp = [
+        nested_list_step_temp: list[list[np.array]] = [
             list(matrix_state_action) for matrix_state_action in ndarray3d_temp
         ]
 
         # Get new uncontrolled derivative
-        nested_list_state_derivative = (
+        nested_list_state_derivative: list[list[list[float]]] = (
             acqopt.acqfunction.model.call_function_sample_list(nested_list_step_temp)
         )
-        ndarray3d_state_derivative = np.array(nested_list_state_derivative)
+        ndarray3d_state_derivative: np.array = np.array(nested_list_state_derivative)
 
         # Add the derivative to the previous state
-        ndarray3d_new_states = (
+        ndarray3d_new_states: np.array = (
             ndarray3d_temp[:, :, :dim_state] + ndarray3d_state_derivative
         )
         ndarray_trajectory[:, n_dt, :, :dim_state] = (
@@ -1833,22 +1862,22 @@ def sample_forward_points(
         )
 
     # Returns a nested list format where the time dimension is flattened
-    ndarray3d_flatten_trajectory = ndarray_trajectory.reshape(
-        (n_gp_samples, n_semimarkov_dt * n_initial_points, dim_state_action)
+    ndarray3d_flatten_trajectory: np.array = ndarray_trajectory.reshape(
+        (n_gp_samples, max_interdecision_epochs * n_initial_points, dim_state_action)
     )
 
     # Take the mean over the GP samples
-    matrix_mean_trajectory = np.mean(ndarray3d_flatten_trajectory, axis=0)
+    matrix_mean_trajectory: np.array = np.mean(ndarray3d_flatten_trajectory, axis=0)
 
-    if (
-        acqopt.acqfunction.algorithm.params.project_to_domain
-    ):  # TODO add the crop to domain option?
+    if acqopt.acqfunction.algorithm.params.project_to_domain:
+        # TODO add the crop to domain option?
+
         # Set domain
         array_state_action_domain_lower_bound = np.concatenate(
-            [env.observation_space.low, env.action_space.low]
+            [gym_env.observation_space.low, gym_env.action_space.low]
         )
         array_state_action_domain_upper_bound = np.concatenate(
-            [env.observation_space.high, env.action_space.high]
+            [gym_env.observation_space.high, gym_env.action_space.high]
         )
         list_tuple_domain = [
             elt
