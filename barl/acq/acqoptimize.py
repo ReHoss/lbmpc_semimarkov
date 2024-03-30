@@ -22,6 +22,16 @@ class AcqOptimizer(Base):
     Class for optimizing acquisition functions.
     """
 
+    # CHANGES @REMY: --- Start ---
+    # Define an __init__ method to initialize the class, this is needed for static
+    # typing to work correctly
+    def __init__(self, params: dict):
+        super().__init__(params=params)
+        self.risk_vals = None
+        self.eval_vals = None
+        self.eval_steps = None
+        self.get_policies = None
+
     def set_params(self, params):
         """Set self.params, the parameters for the AcqOptimizer."""
         super().set_params(params)

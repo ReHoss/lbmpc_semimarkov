@@ -108,6 +108,7 @@ try:
     from barl.envs.kuramoto_sivashinsky import KuramotoSivashinsky, KS_reward
     from barl.envs.pendulum_semimarkov import PendulumEnvSemiMarkov, pendulum_semimarkov_reward
     from barl.envs.pendulum_semimarkov_new import PendulumEnvSemiMarkovNew, pendulum_semimarkov_reward_new
+    from barl.envs.pendulum_trigo import PendulumEnvTrigo, pendulum_trigo_reward
     register(
         id="lorenz-v0",
         entry_point=LorenzEnv,
@@ -142,6 +143,13 @@ try:
     )
     reward_functions['bacpendulum-semimarkov-new-v0'] = pendulum_semimarkov_reward_new
     tf_reward_functions['bacpendulum-semimarkov-new-v0'] = pendulum_semimarkov_reward_new
+
+    register(
+        id='bacpendulum-trigo-v0',
+        entry_point=PendulumEnvTrigo,
+    )
+    reward_functions['bacpendulum-trigo-v0'] = pendulum_trigo_reward
+    tf_reward_functions['bacpendulum-trigo-v0'] = pendulum_trigo_reward
 
 
 except Exception as err:

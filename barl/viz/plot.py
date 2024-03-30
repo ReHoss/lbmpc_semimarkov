@@ -694,6 +694,147 @@ def plot_pendulum_semimarkov_new(path, ax=None, fig=None, domain=None, path_str=
     return ax, fig
 
 
+def plot_pendulum_trigo(path, ax=None, fig=None, domain=None, path_str="samp", env=None):
+    """Plot a path through an assumed two-dimensional state space."""
+    assert path_str in ["samp", "true", "samp_1d", "postmean_1d", "gt_1d"]  # INFO @REMY: added 1d cases
+    ndim_state = 3
+    ndim_action = 3
+    list_y_label = ["$x_1$", "$x_2$", "$x_3$", "$a_1$", "$a_2$", "$a_3$", "$\\frac{dx}{dt}$", "$\\frac{dx}{dt}$", "$\\frac{dx}{dt}$"]
+
+    if ax is None:  # INFO @REMY: if called without ax it returns a new figures and axis only
+        assert domain is not None
+        # INFO @REMY: Custom plot function for pendulum below
+        if path_str in ["samp_1d", "postmean_1d", "gt_1d"]:
+            assert env is not None
+            # nrows = 1 if path_str in ["samp_1d"] else 2
+            nrows = ndim_state
+            ncols = ndim_action
+            time_limit = 1.5 * env.total_time_upper_bound * env.dt
+            fig, ax = plt.subplots(nrows, ncols, figsize=(12, 8))
+            for i, axes in enumerate(ax.flatten()):
+                axes.set(
+                    xlim=(0, time_limit),
+                    xlabel=f"$t$",
+                    ylabel=list_y_label[i],
+                )
+            if path is None:
+                return ax, fig
+        # INFO @REMY: End of custom plot function for pendulum
+        else:  # CHANGES @REMY: else condition has been added
+            # time_limit = 2 * env.total_time_upper_bound * env.dt
+            fig, axes = plt.subplots(1, ndim_state, figsize=(14, 8))
+            for ax in axes.flatten():
+                ax.set(
+                    # xlim=(0, time_limit),
+                    xlabel="$t$",
+                    ylabel="$x_i(t)$",
+                )
+            # Set y limit
+            axes[0].set_ylim([-1, 1])
+            axes[1].set_ylim([-1, 1])
+            axes[2].set_ylim([-8, 8])
+            if path is None:
+                return axes, fig
+
+    x_plot = [xi[0] for xi in path.x]
+    y_plot = [xi[1] for xi in path.x]
+    z_plot = [xi[2] for xi in path.x]
+
+    # Assert env.action_max_value is not None and unnormalize action
+    if env is not None:
+        assert env.action_max_value is not None
+        action_max_value = env.action_max_value
+        a1_plot = [xi[3] * action_max_value for xi in path.x]
+        t_plot = np.linspace(0, env.dt * env.horizon, len(path.x))  # INFO @REMY: added time plot
+        if path_str != "samp_1d":  # Hence crop to domain is supported
+            assert len(t_plot) == int(env.horizon)
+    if path_str == "true":
+        ax[0, 0].plot(t_plot, x_plot, "o", alpha=0.75, markersize=1.0, linewidth=1.0, linestyle="dashed", label="MPC on ground truth $\\tau^*$")
+        ax[0, 1].plot(t_plot, y_plot, "o", alpha=0.75, markersize=1.0, linewidth=1.0, linestyle="dashed")
+        ax[0, 2].plot(t_plot, z_plot, "o", alpha=0.75, markersize=1.0, linewidth=1.0, linestyle="dashed")
+        return ax, fig
+    elif path_str == "postmean":
+        ax.plot(x_plot, y_plot, "r--", linewidth=3)
+        ax.plot(x_plot, y_plot, "*", color="r", markersize=5)  # INFO @REMY: TODO: warning it is not plotting the mean but the ground truth
+    # elif path_str == "samp":
+    # ax.plot(x_plot, y_plot, 'k--', linewidth=1, alpha=0.3, markersize=0.1)
+    # ax.plot(x_plot, y_plot, 'o', alpha=0.3, markersize=0.1)
+    elif path_str == "samp":
+        lines2d = ax.plot(x_plot, y_plot, "--", linewidth=1, alpha=0.3)
+        ax.plot(x_plot, y_plot, "o", color=lines2d[0].get_color(), alpha=0.3)
+    # INFO @REMY: below cases are added by me
+    elif path_str == "gt_1d":
+        str_title = f"MPC on the ground truth $T( \\cdot | D)$ applied to the real system"
+        ax[0, 0].plot(t_plot, x_plot, "o", alpha=0.75, markersize=1.0, linewidth=1.0, linestyle="dotted")
+        ax[0, 1].plot(t_plot, y_plot, "o", alpha=0.75, markersize=1.0, linewidth=1.0, linestyle="dotted")
+        ax[0, 2].plot(t_plot, z_plot, "o", alpha=0.75, markersize=1.0, linewidth=1.0, linestyle="dotted")
+        ax[1, 0].plot(t_plot, a1_plot, "o", alpha=0.75, markersize=0.5, linewidth=1.0, linestyle="dotted", label="control $a_1$")
+
+        # Set y limit to the time delay max
+        ax[0, 0].set_ylim([-1, 1])
+        ax[0, 1].set_ylim([-1, 1])
+        ax[0, 2].set_ylim([-8, 8])
+        ax[1, 0].set_ylim([-env.action_max_value, env.action_max_value])
+        ax[1, 1].set_ylim([-env.action_max_value, env.action_max_value])
+        ax[1, 2].set_ylim([-env.action_max_value, env.action_max_value])
+
+        # Set figure title
+        fig.suptitle(str_title)
+        return ax, fig
+    elif path_str == "samp_1d":
+        str_title = f"Trajectories following $\\hat{{T}}_i( \\cdot | D)$ for all $1 \\leq i \\leq m$; shorter trajectories when filtering out flag is on; "
+        ax[0, 0].plot(t_plot, x_plot, "o", alpha=0.75, markersize=1.0, linewidth=1.0, linestyle="dotted")
+        ax[0, 1].plot(t_plot, y_plot, "o", alpha=0.75, markersize=1.0, linewidth=1.0, linestyle="dotted")
+        ax[0, 2].plot(t_plot, z_plot, "o", alpha=0.75, markersize=1.0, linewidth=1.0, linestyle="dotted")
+        ax[1, 0].plot(t_plot, a1_plot, "o", alpha=0.75, markersize=0.5, linewidth=1.0, linestyle="dotted", label="control $a_1$")
+
+        # Set figure title
+        fig.suptitle(str_title)
+        return ax, fig
+    elif path_str == "postmean_1d":
+        ax[0, 0].plot(t_plot, x_plot, "o", alpha=0.75, markersize=1.0, linewidth=1.0, linestyle="dotted")
+        ax[0, 1].plot(t_plot, y_plot, "o", alpha=0.75, markersize=1.0, linewidth=1.0, linestyle="dotted")
+        ax[0, 2].plot(t_plot, z_plot, "o", alpha=0.75, markersize=1.0, linewidth=1.0, linestyle="dotted")
+        ax[1, 0].plot(t_plot, a1_plot, "o", alpha=0.75, markersize=0.5, linewidth=1.0, linestyle="dotted", label="control $a_1$")
+
+        x_hat_plot = [xi[0] for xi in path.y_hat]
+        y_hat_plot = [xi[1] for xi in path.y_hat]
+        z_hat_plot = [xi[2] for xi in path.y_hat]
+
+        x_true_plot = [xi[0] for xi in path.y]
+        y_true_plot = [xi[1] for xi in path.y]
+        z_true_plot = [xi[2] for xi in path.y]
+
+        ax[2, 0].plot(t_plot, x_hat_plot, "o", alpha=0.75, markersize=1.0, color="green", label="GP posterior $\\Delta$", linewidth=1.0, linestyle="dashed")
+        ax[2, 1].plot(t_plot, y_hat_plot, "o", alpha=0.75, markersize=1.0, color="green", linewidth=1.0, linestyle="dashed")
+        ax[2, 2].plot(t_plot, z_hat_plot, "o", alpha=0.75, markersize=1.0, color="green", linewidth=1.0, linestyle="dashed")
+        # Plot true delta (y) in other color
+        ax[2, 0].plot(t_plot, x_true_plot, "o", alpha=0.75, markersize=1.0, color="red", label="Ground truth $\\Delta$", linewidth=1.0, linestyle="dashed")
+        ax[2, 1].plot(t_plot, y_true_plot, "o", alpha=0.75, markersize=1.0, color="red", linewidth=1.0, linestyle="dashed")
+        ax[2, 2].plot(t_plot, z_true_plot, "o", alpha=0.75, markersize=1.0, color="red", linewidth=1.0, linestyle="dashed")
+
+        # Set y limit
+        ax[0, 0].set_ylim([-1, 1])
+        ax[0, 1].set_ylim([-1, 1])
+        ax[0, 2].set_ylim([-8, 8])
+        ax[1, 0].set_ylim([-env.action_max_value, env.action_max_value])
+        ax[1, 1].set_ylim([-env.action_max_value, env.action_max_value])
+        ax[1, 2].set_ylim([-env.action_max_value, env.action_max_value])
+        ax[2, 0].set_ylim([-1, 1])
+        ax[2, 1].set_ylim([-1, 1])
+        ax[2, 2].set_ylim([-8, 8])
+
+        # Set legend
+        ax[2, 0].legend()
+
+        # Set figure title
+        fig.suptitle(f"Trajectories from the current MPC policy on the GP posterior $\\hat{{T}}( \\cdot | D)$ applied to the real system (top row) ; Trajectories of $\\Delta_t = x_{{t+1}} - x_t$ where $x_{{t+1}} ~ GP(x_t, a_t)$ vs. the ground truth (bottom row)")
+        # Add legend which associate green to the GP posterior and red to the true delta
+
+        return ax, fig
+
+    return ax, fig
+
 
 def plot_lava_path(path, ax=None, fig=None, domain=None, path_str="samp", env=None):
     """Plot a path through an assumed two-dimensional state space."""
@@ -783,7 +924,7 @@ def scatter(ax, x, **kwargs):
 
 
 def plot(ax, x, shape, env_name=None, env=None, list_semi_markov_delays=None, **kwargs):  # INFO @REMY: added shape argument
-    if env_name == "lorenz-new-v0":
+    if env_name in ["lorenz-new-v0", "bacpendulum-trigo-v0"]:
         assert env is not None
         assert list_semi_markov_delays is not None
         # Check dimension of x and squeeze if necessary
