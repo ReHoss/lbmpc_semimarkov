@@ -22,21 +22,20 @@ Interesting ideas in the original implementation:
 import argparse
 
 # from argparse import Namespace
-from pathlib import Path
 import pickle
 import logging
 import numpy as np
 import gymnasium
 import tqdm
-from functools import partial
-from copy import deepcopy
+import functools
+import copy
 import tensorflow as tf
 from tensorflow import keras
 
 import random
 from matplotlib import pyplot as plt
 import gpflow.config
-from sklearn.metrics import explained_variance_score
+import sklearn
 
 
 import barl
@@ -45,8 +44,6 @@ import viz.plot_gp_mpc_groundtruth
 import viz.plot_ground_truth
 import viz.plot_observations
 
-from barl.models.gpfs_gp import BatchMultiGpfsGp, MultiGpfsGp  # TFMultiGpfsGp,
-from barl.models.gpflow_gp import get_gpflow_hypers_from_data
 from barl.acq.acquisition import (
     MultiBaxAcqFunction,
     JointSetBaxAcqFunction,
@@ -57,30 +54,17 @@ from barl.acq.acquisition import (
     BatchUncertaintySamplingAcqFunction,
     RewardSetAcqFunction,
 )
-from barl.acq.acqoptimize import (
-    AcqOptimizer,
-    PolicyAcqOptimizer,
-)
-from barl import envs  # , alg
-from barl.envs.wrappers import (
-    NormalizedEnv,
-    make_normalized_reward_function,
-    make_update_obs_fn,
-)
-from barl.util import misc_util
-
-
-# CHANGES @REMY: Add project to domain case
-from barl.policies import BayesMPCPolicy
 
 # CHANGES @REMY: Start - Import for evaluation
 import mlflow  # For logging
+
 # import matplotlib  # For color palette
 import yaml  # For config dumping
+
 # CHANGES @REMY: End
 import omegaconf
 
-
+from pathlib import Path
 from typing import Callable, TypedDict, Type, Tuple, Dict, Any
 
 
@@ -335,7 +319,7 @@ def start_barl(dict_config: omegaconf.DictConfig, path_barl_data: str):
     dumper.add("test y", test_data.y, verbose=False)
 
     # Set model
-    gp_model_class: Type[MultiGpfsGp]
+    gp_model_class: Type[barl.models.gpfs_gp.MultiGpfsGp]
     gp_model_params: Dict[str, Any]
     gp_model_class, gp_model_params = get_model(
         dict_config, gym_env, obs_dim, action_dim
@@ -397,7 +381,8 @@ def start_barl(dict_config: omegaconf.DictConfig, path_barl_data: str):
         # )
         fit_data = argparse.Namespace(
             # CHANGES @REMY: ignore MPC data as it is too close to zero
-            x=test_data.x, y=test_data.y
+            x=test_data.x,
+            y=test_data.y,
         )
         gp_params = (
             None if dict_config.fit_hypers else gp_model_params
@@ -443,7 +428,7 @@ def start_barl(dict_config: omegaconf.DictConfig, path_barl_data: str):
         # model can be None if it isn't needed here
         array_state_action_next: np.ndarray
         list_namespace_gp_mpc: list[argparse.Namespace]
-        multi_gp_model: MultiGpfsGp
+        multi_gp_model: barl.models.gpfs_gp.MultiGpfsGp
         array_xk: np.ndarray
         interdecision_epochs: int
 
@@ -470,7 +455,7 @@ def start_barl(dict_config: omegaconf.DictConfig, path_barl_data: str):
             acqfn_params=acqfn_params,
             acqopt_class=acqopt_class,
             acqopt_params=acqopt_params,
-            namespace_data=deepcopy(namespace_data),
+            namespace_data=copy.deepcopy(namespace_data),
             dumper=dumper,
             obs_dim=obs_dim,
             # action_dim=action_dim,
@@ -710,15 +695,15 @@ def get_env(dict_config: omegaconf.DictConfig):
             raise NotImplementedError("# CHANGES @REMY: this is not implemented")
         else:
             reward_function: Callable[[np.array, np.array, int], np.array] = (
-                envs.reward_functions[dict_config.env.name]
+                barl.envs.reward_functions[dict_config.env.name]
             )
     else:
         raise NotImplementedError("# CHANGES @REMY: this is not implemented")
         # reward_function = None
     if dict_config.normalize_env:
-        gym_env: gymnasium.Env = envs.wrappers.NormalizedEnv(gym_env)
+        gym_env: gymnasium.Env = barl.envs.wrappers.NormalizedEnv(gym_env)
         if reward_function is not None:
-            reward_function = make_normalized_reward_function(
+            reward_function = barl.envs.wrappers.make_normalized_reward_function(
                 norm_env=gym_env,
                 reward_function=reward_function,
             )
@@ -730,7 +715,7 @@ def get_env(dict_config: omegaconf.DictConfig):
         f_transition_mpc: Callable = barl.util.control_util.get_f_batch_mpc(
             env=gym_env, use_info_delta=dict_config.teleport
         )
-    update_fn: Callable = make_update_obs_fn(
+    update_fn: Callable = barl.envs.wrappers.make_update_obs_fn(
         env=gym_env, teleport=dict_config.teleport, use_tf=dict_config.alg.gd_opt
     )
     probability_x0 = gym_env.reset
@@ -771,7 +756,7 @@ def get_initial_data(
 
 def get_model(
     dict_config: omegaconf.DictConfig, gym_env: EnvBARL, obs_dim: int, action_dim: int
-) -> Tuple[Type[MultiGpfsGp], Dict[str, Any]]:
+) -> Tuple[Type[barl.models.gpfs_gp.MultiGpfsGp], Dict[str, Any]]:
     gp_params = {
         "ls": dict_config.env.gp.ls,
         "alpha": dict_config.env.gp.alpha,
@@ -787,7 +772,7 @@ def get_model(
         "gp_params": gp_params,
         "tf_dtype": barl.util.misc_util.get_tf_dtype(dict_config.tf_precision),
     }
-    gp_model_class = BatchMultiGpfsGp
+    gp_model_class = barl.models.gpfs_gp.BatchMultiGpfsGp
     return gp_model_class, gp_model_params
 
 
@@ -899,11 +884,14 @@ def get_acq_opt(
         if dict_config.alg.open_loop:
             acqopt_params["planning_horizon"] = gym_env.horizon
             acqopt_params["actions_per_plan"] = gym_env.horizon
-        acqopt_class = PolicyAcqOptimizer  # INFO @REMY Standard original TIP
+        acqopt_class = (
+            barl.acq.acqoptimize.PolicyAcqOptimizer
+        )  # INFO @REMY Standard original TIP
         # (TIP = Trajectory Information Planning)
         # CHANGES @REMY: Start - Add the option to use the semimarkov model
         if getattr(dict_config.alg, "max_interdecision_epochs", None) is not None:
-            acqopt_class = AcqOptimizer  # INFO @REMY: this allows
+            acqopt_class = barl.acq.acqoptimize.AcqOptimizer
+            # INFO @REMY: this allows
             # to use a batch of well-chosen candidates
             acqopt_params["max_interdecision_epochs"] = (
                 dict_config.alg.max_interdecision_epochs
@@ -961,7 +949,7 @@ def fit_hypers(
             data_fit = argparse.Namespace(
                 x=fit_data.x, y=[yi[idx] for yi in fit_data.y]
             )
-            gp_params = get_gpflow_hypers_from_data(
+            gp_params = barl.models.gpflow_gp.get_gpflow_hypers_from_data(
                 data_fit,
                 print_fit_hypers=False,
                 opt_max_iter=dict_config.env.gp.opt_max_iter,
@@ -987,10 +975,10 @@ def fit_hypers(
     # CHANGES @REMY: Start - Add the case where the hyperparameters are pre-specified
     else:
         gp_params = gp_model_params["gp_params"]
-    model = BatchMultiGpfsGp(gp_model_params, fit_data)
+    model = barl.models.gpfs_gp.BatchMultiGpfsGp(gp_model_params, fit_data)
     mu_list, covs = model.get_post_mu_cov(list(xtest))
     yhat = np.array(mu_list).T
-    ev = explained_variance_score(ytest, yhat)
+    ev = sklearn.metrics.explained_variance_score(ytest, yhat)
     logging.info(f"Explained Variance on test data: {ev:.2%}")
     # CHANGES @REMY: Start - Write the results of gp_params as a text file
     Path(expdir / "fit_hypers").mkdir(parents=True, exist_ok=False)
@@ -1001,7 +989,7 @@ def fit_hypers(
     for i in range(ytest.shape[1]):
         y_i = ytest[:, i : i + 1]
         yhat_i = yhat[:, i : i + 1]
-        ev_i = explained_variance_score(y_i, yhat_i)
+        ev_i = sklearn.metrics.explained_variance_score(y_i, yhat_i)
         logging.info(f"EV on dim {i}: {ev_i}")
         # CHANGES @REMY: Start - Write the results as a text file
         with open(expdir / "fit_hypers" / "explained_variance.txt", "a") as f:
@@ -1154,7 +1142,9 @@ def get_next_point(
     list_namespace_gp_mpc: list = []
     if (len(namespace_data.x) == 0) and (not dict_config.alg.rollout_sampling):
         # TODO: remove second condition above ?
-        multi_gp_model: MultiGpfsGp = gp_model_class(gp_model_params, namespace_data)
+        multi_gp_model: barl.models.gpfs_gp.MultiGpfsGp = gp_model_class(
+            gp_model_params, namespace_data
+        )
         # INFO @REMY: In the classical BARL case, the state-action pairs are sampled
         # Hence, a random initial action is sampled
         interdecision_epochs: int = 1
@@ -1169,7 +1159,9 @@ def get_next_point(
 
         # INFO @REMY: --- First part: sample the candidate points ---
 
-        multi_gp_model: MultiGpfsGp = gp_model_class(gp_model_params, namespace_data)
+        multi_gp_model: barl.models.gpfs_gp.MultiGpfsGp = gp_model_class(
+            gp_model_params, namespace_data
+        )
         # INFO @REMY: something like barl.models.gpfs_gp.BatchMultiGpfsGp;
         # data is the dataset D = {(x_i, y_i)}_{i=1}^n we carefullly choose
         # Set and optimize acquisition function
@@ -1354,10 +1346,12 @@ def get_next_point(
 
     elif dict_config.alg.use_mpc:
         # INFO @REMY: it looks like that part only uses MPC on the GP model
-        multi_gp_model: MultiGpfsGp = gp_model_class(gp_model_params, namespace_data)
+        multi_gp_model: barl.models.gpfs_gp.MultiGpfsGp = gp_model_class(
+            gp_model_params, namespace_data
+        )
         algo.initialize()
 
-        policy_function: Callable = partial(
+        policy_function: Callable = functools.partial(
             algo.execute_mpc,
             f=barl.util.misc_util.make_postmean_fn(
                 multi_gp_model, use_tf=dict_config.alg.gd_opt
@@ -1448,10 +1442,10 @@ def evaluate_mpc(  # TODO: Understand this function
                 reward_fn=reward_fn,
                 function_sample_list=model.call_function_sample_list,
             )
-            policy = BayesMPCPolicy(params=policy_params)
+            policy = barl.policies.BayesMPCPolicy(params=policy_params)
 
         else:
-            policy = partial(  # INFO @REMY: partial is a function that takes a function
+            policy = functools.partial(  # INFO @REMY: partial is a function that takes a function
                 # and some arguments and returns a function
                 # with the arguments already set
                 algo.execute_mpc,

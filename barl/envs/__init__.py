@@ -10,6 +10,10 @@ from barl.envs.pilco_cartpole import (
 from barl.envs.lava_path import LavaPathEnv, lava_path_reward, ShortLavaPathEnv
 from barl.envs.weird_gain import WeirdGainEnv, weird_gain_reward, WeirderGainEnv
 
+from . import wrappers
+
+__all__ = [wrappers]
+
 # register each environment we wanna use
 register(
     id="bacpendulum-v0",
