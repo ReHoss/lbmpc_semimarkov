@@ -16,7 +16,10 @@ from barl.viz.plot import (
     plot_lorenz_new,  # CHANGES @REMY: Added plot_lorenz (new)
     plot_pendulum_semimarkov,  # CHANGES @REMY: Added plot_pendulum_semimarkov
     plot_pendulum_semimarkov_new,  # CHANGES @REMY: Added plot_pendulum_semimarkov_new
+    plot_pendulum_trigo,
 )
+
+
 
 _plotters = {
     "bacpendulum-v0": plot_pendulum,
@@ -40,6 +43,11 @@ _plotters = {
     "lorenz-new-v0": plot_lorenz_new,  # CHANGES @REMY: Added plot_lorenz
     "bacpendulum-semimarkov-v0": plot_pendulum_semimarkov,  # CHANGES @REMY: Added plot_pendulum_semimarkov
     "bacpendulum-semimarkov-new-v0": plot_pendulum_semimarkov_new,  # CHANGES @REMY: Added plot_pendulum_semimarkov_new
+    "bacpendulum-trigo-v0": plot_pendulum_trigo,
 }
 plotters = defaultdict(lambda: plot_generic)
 plotters.update(_plotters)
+
+# Changes @REMY: Add global variable to store the environment name
+
+TUPLE_ENVIRONMENTS_NAME = ("bacpendulum-trigo-v0", "ks-v0")

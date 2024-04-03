@@ -11,8 +11,10 @@ class EnvBARL(gymnasium.Env):
     def __init__(
         self,
         action_max_value: float,
+        action_space: gymnasium.spaces.Box,
         dt: float,
         horizon: int,
+        state_space: gymnasium.spaces.Box,
         total_time_upper_bound: int,
     ):
         self.action_max_value: float = action_max_value
@@ -20,19 +22,21 @@ class EnvBARL(gymnasium.Env):
         self.horizon: int = horizon  # TODO: Centralise with run.py version
         self.total_time_upper_bound: float = total_time_upper_bound
 
+        self.action_space: gymnasium.spaces.Box = action_space
+        self.state_space: gymnasium.spaces.Box = state_space
         super().__init__()
 
 
-def plot_ground_truth(
+def plot_gp_mpc(
     env: EnvBARL,
+    list_namespace_gp_mpc: list[argparse.Namespace],
     name_env: str,
-    namespace_true_path: argparse.Namespace,
 ) -> Tuple[plt.Figure, plt.Axes]:
     plt_figures: plt.Figure
     plt_axes: plt.Axes | np.ndarray
     if name_env == "bacpendulum-trigo-v0":
-        plt_figures, plt_axes = plot_ground_truth_pendulum_trigo(
-            env=env, namespace_true_path=namespace_true_path
+        plt_figures, plt_axes = plot_gp_mpc_pendulum_trigo(
+            env=env, list_namespace_gp_mpc=list_namespace_gp_mpc
         )
         return plt_figures, plt_axes
     elif name_env == "ks-v0":
@@ -43,27 +47,41 @@ def plot_ground_truth(
         raise ValueError(f"Environment {name_env} not found")
 
 
-# noinspection DuplicatedCode
-def plot_ground_truth_pendulum_trigo(
-    env: EnvBARL,
-    namespace_true_path: argparse.Namespace,
+def plot_gp_mpc_pendulum_trigo(
+    env: EnvBARL, list_namespace_gp_mpc: list[argparse.Namespace]
 ) -> Tuple[plt.Figure, plt.Axes]:
+
     str_title: str = (
-        f"MPC on the ground truth $T( \\cdot | D)$ applied to the real system"
+        f"MPC on the model $\\hat{{\\mathcal{{P}}}}( \\cdot | D)$"
+        f" applied to the real system"
+    )
+
+    # Assert all the namespace have the same length
+    assert all(
+        len(namespace_gp_mpc.x) == len(list_namespace_gp_mpc[0].x)
+        for namespace_gp_mpc in list_namespace_gp_mpc
+    )
+    assert all(
+        len(namespace_gp_mpc.y) == len(list_namespace_gp_mpc[0].y)
+        for namespace_gp_mpc in list_namespace_gp_mpc
     )
 
     tuple_figsize: Tuple[int, int] = (12, 8)
-    dim_state: int = 3
-    dim_action: int = 1
+    dim_observation: int = env.observation_space.shape[0]
+    dim_state: int = dim_observation  # TODO: Fix this at some point
+    dim_action: int = env.action_space.shape[0]
     axes_xlim: float = 1.5 * env.total_time_upper_bound * env.dt
 
+    namespace_path_reference: argparse.Namespace = list_namespace_gp_mpc[0]
+
     assert env.action_max_value is not None
-    length_time_series: int = len(namespace_true_path.x)
+    length_time_series: int = len(namespace_path_reference.x)
     action_max_value: float = env.action_max_value
-    matrix_state_action: np.ndarray = np.array(namespace_true_path.x)
-    matrix_state: np.ndarray = matrix_state_action[:, :dim_state]
-    matrix_action: np.ndarray = matrix_state_action[:, dim_state:]
-    matrix_action_unscaled: np.ndarray = matrix_action * action_max_value
+
+    nd_array_state_action: np.ndarray = np.array([namespace_gp_mpc.x for namespace_gp_mpc in list_namespace_gp_mpc])
+    nd_array_state: np.ndarray = nd_array_state_action[:, :, :dim_state]
+    nd_array_action: np.ndarray = nd_array_state_action[:, :, dim_state:]
+    nd_array_action_unscaled: np.ndarray = nd_array_action * action_max_value
 
     array_time_axis: np.ndarray = np.linspace(
         0, env.dt * env.horizon, length_time_series
@@ -93,7 +111,7 @@ def plot_ground_truth_pendulum_trigo(
         )
         ax[0, i].plot(
             array_time_axis,
-            matrix_state[:, i],
+            nd_array_state[:, :, i].T,
             "o",
             label="true state",
             alpha=0.75,
@@ -112,7 +130,7 @@ def plot_ground_truth_pendulum_trigo(
         )
         ax[1, i].plot(
             array_time_axis,
-            matrix_action_unscaled[:, i],
+            nd_array_action_unscaled[:, :, i].T,
             "o",
             label="true action",
             alpha=0.75,
@@ -121,19 +139,16 @@ def plot_ground_truth_pendulum_trigo(
             linestyle="dotted",
         )
 
-    # This is proper to the environment
-    # Set y limit to the time delay max
-    ax[0, 0].set_ylim([-1, 1])
-    ax[0, 1].set_ylim([-1, 1])
-    ax[0, 2].set_ylim([-8, 8])
-    ax[1, 0].set_ylim([-env.action_max_value, env.action_max_value])
-    ax[1, 1].set_ylim([-env.action_max_value, env.action_max_value])
-    ax[1, 2].set_ylim([-env.action_max_value, env.action_max_value])
+    str_title = (
+        f"Trajectories following $\\hat{{\\mathcal{{P}}}}_i( \\cdot | D)$ for all"
+        f" $1 \\leq i \\leq m$;"
+        f" shorter trajectories when filtering out flag is on; "
+    )
 
     # Set figure title
     fig.suptitle(str_title)
+    fig.tight_layout()
+    # TODO: Set proper limits with a function
+    # TODO: Quid of normalisation?
+
     return fig, ax
-
-
-def plot_ground_truth_ks() -> None:
-    raise NotImplementedError("Kuramoto-Sivashinsky environment not implemented yet")

@@ -6,7 +6,7 @@ Main File for BARL and associated code.
 Interesting ideas in the original implementation:
 - Learn reward
 - Gradient descent optimization
-- Kgrl, pilco, kg_policy
+- Knowledge Gradient RL, PILCO, kg_policy
 
 
 # TODO: Global
@@ -41,6 +41,10 @@ from sklearn.metrics import explained_variance_score
 
 
 import barl
+import viz.plot_gp_mpc_trajectories
+import viz.plot_gp_mpc_groundtruth
+import viz.plot_ground_truth
+import viz.plot_observations
 
 from barl.models.gpfs_gp import BatchMultiGpfsGp, MultiGpfsGp  # TFMultiGpfsGp,
 from barl.models.gpflow_gp import get_gpflow_hypers_from_data
@@ -83,13 +87,12 @@ from barl.util.domain_util import (
     project_to_domain,
 )  # CHANGES @REMY: Add project to domain case
 from barl.util.timing import Timer
-from barl.viz import make_plot_obs, plot, plot_ground_truth
 from barl.policies import BayesMPCPolicy
-import neatplot
 
 # CHANGES @REMY: Start - Import for evaluation
 import mlflow  # For logging
-import matplotlib  # For color palette
+
+# import matplotlib  # For color palette
 import yaml  # For config dumping
 
 # CHANGES @REMY: End
@@ -126,12 +129,12 @@ plot_path = "plots"
     config_path="cfg", config_name="config", version_base=None
 )  # CHANGES @REMY: version_base=None is added to clear a warning
 # (see https://hydra.cc/docs/1.2/upgrades/version_base/)
-def main(config: omegaconf.DictConfig):
+def main(dict_config: omegaconf.DictConfig):
     path_current_script = Path(__file__).parent
     path_mlflow_uri = Path(path_current_script / "experiments" / "mlruns").resolve()
 
-    print(f"Name of the experiment: {config['name']}")
-    name_xp = config["name"]  # Get the name of the experiment
+    print(f"Name of the experiment: {dict_config['name']}")
+    name_xp = dict_config["name"]  # Get the name of the experiment
     print(f"Setting up MLFlow tracking uri: {path_mlflow_uri}")
     mlflow.set_tracking_uri(
         f"file:{path_mlflow_uri}"
@@ -169,7 +172,7 @@ def main(config: omegaconf.DictConfig):
             )
 
         dict_config_flattened = flatten_dict(
-            omegaconf.OmegaConf.to_container(config, resolve=True)
+            omegaconf.OmegaConf.to_container(dict_config, resolve=True)
         )
         for key, value in dict_config_flattened.items():
             mlflow.log_param(key, value)
@@ -184,20 +187,20 @@ def main(config: omegaconf.DictConfig):
             dict_config_hydra.runtime.output_dir, artifact_path="hydra_config"
         )
 
-        main_original(config, path_barl_data=path_barl_data)
+        main_original(dict_config, path_barl_data=path_barl_data)
 
 
-def main_original(config: omegaconf.DictConfig, path_barl_data: str):
+def main_original(dict_config: omegaconf.DictConfig, path_barl_data: str):
     # ==============================================
     #   Define and configure
     # ==============================================
-    dumper = Dumper(config.name, path_expdir=path_barl_data)
-    configure(config)
+    dumper = Dumper(dict_config.name, path_expdir=path_barl_data)
+    configure(dict_config)
 
     current_iter: int = 0  # CHANGES @STELLA: I think this is due
     # to computational limitations, we need to start from a certain iteration
-    if config.resume:
-        current_iter = dumper.retrieve(config.resume)
+    if dict_config.resume:
+        current_iter = dumper.retrieve(dict_config.resume)
     logging.info(
         f"Starting from iteration {current_iter}"
     )  # CHANGES @STELLA: end changes
@@ -210,7 +213,7 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
     # rewards, state updates
 
     tuple_barl_env_objects: tuple[EnvBARL, Callable, Callable, Callable, Callable] = (
-        get_env(config=config)
+        get_env(dict_config=dict_config)
     )
     gym_env, f_transition_mpc, reward_function, update_fn, probability_x0 = (
         tuple_barl_env_objects
@@ -230,34 +233,34 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
 
     tuple_barl_env_objects_eval: tuple[
         EnvBARL, Callable, Callable, Callable, Callable
-    ] = get_env(config=config)
+    ] = get_env(dict_config=dict_config)
     eval_env, _, eval_reward_function, _, _ = tuple_barl_env_objects_eval
 
     # CHANGES @REMY: Start - Check the semimarkov horizon parameter
     # Check the semimarkov horizon parameter
     assert (
-        config.alg.get("max_interdecision_epochs") is not None
+        dict_config.alg.get("max_interdecision_epochs") is not None
     ), "Need to specify max_interdecision_epochs in config"
     assert (
-        type(config.alg.get("max_interdecision_epochs")) is int
+        type(dict_config.alg.get("max_interdecision_epochs")) is int
     ), "max_interdecision_epochs must be an integer"
     assert (
-        config.alg.get("max_interdecision_epochs") >= 1
+        dict_config.alg.get("max_interdecision_epochs") >= 1
     ), "max_interdecision_epochs must be positive"
 
     # New upper bound for horizon on the environment
-    gym_env.horizon *= config.alg.max_interdecision_epochs
+    gym_env.horizon *= dict_config.alg.max_interdecision_epochs  # TODO: Fix that stuff
     # CHANGES @REMY: End
 
     # Set start obs
-    if config.alg.open_loop:
-        config.fixed_start_obs = True  # TODO: Remove this hack
+    if dict_config.alg.open_loop:
+        dict_config.fixed_start_obs = True  # TODO: Remove this hack
     array_x0: np.ndarray
     array_x0, _ = gym_env.reset()  # if config.fixed_start_obs else None, {}
     logging.info(f"Start obs: {array_x0}")
     # CHANGES @REMY: Start - Generate a list of start observations for evaluation
     list_array_x0: list[np.array] = [
-        np.array(eval_env.reset()[0]) for _ in range(config.num_eval_trials)
+        np.array(eval_env.reset()[0]) for _ in range(dict_config.num_eval_trials)
     ]
 
     # if not isinstance(array_x0, np.ndarray):  # TODO: Maybe put this back
@@ -282,10 +285,10 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
     # Set algorithm
     algo_class: Type[barl.alg.mpc.MPC] = barl.alg.mpc.MPC
 
-    if config.alg.open_loop:
-        config.test_mpc = config.eigmpc
-        config.test_mpc.planning_horizon = gym_env.horizon
-        config.test_mpc.actions_per_plan = gym_env.horizon
+    if dict_config.alg.open_loop:
+        dict_config.test_mpc = dict_config.eigmpc
+        dict_config.test_mpc.planning_horizon = gym_env.horizon
+        dict_config.test_mpc.actions_per_plan = gym_env.horizon
         logging.info("Swapped config because of open loop control")
     dict_test_algo_params: TypedDict(  # TODO: Move this to a separate file
         "dict_test_algo_params",
@@ -314,26 +317,26 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
         # used when no starting obs is provided. otherwise
         # the spaces may be sampled from that env
         reward_function=eval_reward_function,  # TODO: warning here the eval is passed
-        project_to_domain=config["project_to_domain"],
-        base_nsamps=config.test_mpc.nsamps,
-        planning_horizon=config.test_mpc.planning_horizon,
-        n_elites=config.test_mpc.n_elites,
-        beta=config.test_mpc.beta,
-        gamma=config.test_mpc.gamma,
-        xi=config.test_mpc.xi,
-        num_iters=config.test_mpc.num_iters,
-        actions_per_plan=config.test_mpc.actions_per_plan,
+        project_to_domain=dict_config["project_to_domain"],
+        base_nsamps=dict_config.test_mpc.nsamps,
+        planning_horizon=dict_config.test_mpc.planning_horizon,
+        n_elites=dict_config.test_mpc.n_elites,
+        beta=dict_config.test_mpc.beta,
+        gamma=dict_config.test_mpc.gamma,
+        xi=dict_config.test_mpc.xi,
+        num_iters=dict_config.test_mpc.num_iters,
+        actions_per_plan=dict_config.test_mpc.actions_per_plan,
         domain=list_tuple_domain,
         action_lower_bound=gym_env.action_space.low,
         action_upper_bound=gym_env.action_space.high,
-        crop_to_domain=config.crop_to_domain,
+        crop_to_domain=dict_config.crop_to_domain,
         update_fn=update_fn,
     )
     # algo = algo_class(algo_params)
     test_algo: barl.alg.mpc.MPC = algo_class(params=dict_test_algo_params)
 
     namespace_data: Namespace = get_initial_data(
-        config=config,
+        dict_config=dict_config,
         gym_env=gym_env,
         f_transition_mpc=f_transition_mpc,
         list_tuple_domain=list_tuple_domain,
@@ -341,11 +344,11 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
     )  # INFO @REMY: plot_fn is passed because the inital data point will be plotted
 
     # Make a test set for model evalution separate from the controller
-    logging.info(f"Creating test set of size {config.test_set_size}")
+    logging.info(f"Creating test set of size {dict_config.test_set_size}")
     test_data: Namespace = Namespace()  # TODO: Replace by dict
 
     test_data.x = unif_random_sample_domain(  # list[np.array]
-        list_tuple_domain, config.test_set_size
+        list_tuple_domain, dict_config.test_set_size
     )
 
     test_data.y = f_transition_mpc(test_data.x)
@@ -356,12 +359,14 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
     # Set model
     gp_model_class: Type[MultiGpfsGp]
     gp_model_params: Dict[str, Any]
-    gp_model_class, gp_model_params = get_model(config, gym_env, obs_dim, action_dim)
+    gp_model_class, gp_model_params = get_model(
+        dict_config, gym_env, obs_dim, action_dim
+    )
 
     # Set acqfunction
     acqfn_class, acqfn_params = (
         get_acq_fn(  # INFO @REMY: only gets objects and dict parameters
-            config,
+            dict_config,
             gym_env.horizon,  # INFO @REMY: horizon is useless in BARL and TIP cases
             probability_x0,
             reward_function,
@@ -376,12 +381,12 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
     # pick a sampler for start states
     s0_sampler = (
         gym_env.observation_space.sample
-        if config.alg.sample_all_states
+        if dict_config.alg.sample_all_states
         else probability_x0
     )
     acqopt_class, acqopt_params = (
         get_acq_opt(  # INFO @REMY: only gets objects and dict parameters
-            config,
+            dict_config,
             obs_dim,
             action_dim,
             gym_env,
@@ -397,7 +402,7 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
     list_namespace_true_path, namespace_test_mpc_data = execute_gt_mpc(
         algo_class=algo_class,
         dict_algo_params=dict_test_algo_params,
-        dict_config=config,
+        dict_config=dict_config,
         dumper=dumper,
         env=gym_env,
         f_transition_mpc=f_transition_mpc,
@@ -408,7 +413,7 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
     # ==============================================
     #   Optionally: fit GP hyperparameters (then exit)
     # ==============================================
-    if config.fit_hypers or config.eval_gp_hypers:
+    if dict_config.fit_hypers or dict_config.eval_gp_hypers:
         # fit_data = Namespace(
         #     x=test_mpc_data.x + test_data.x, y=test_mpc_data.y + test_data.y
         # )
@@ -418,10 +423,10 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
             )
         )
         gp_params = (
-            None if config.fit_hypers else gp_model_params
+            None if dict_config.fit_hypers else gp_model_params
         )  # INFO @REMY: only pass params for evaluation
         fit_hypers(
-            config,
+            dict_config,
             fit_data,
             # list_tuple_domain,
             dumper.expdir,
@@ -439,7 +444,7 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
     # Set current_obs as fixed start_obs or reset env
     # current_obs = get_start_obs(config, array_x0, gym_env)
     array_xk: np.ndarray = get_start_obs(  # TODO: Here stop using this function
-        dict_config=config, array_x0=array_x0, gym_env=gym_env
+        dict_config=dict_config, array_x0=array_x0, gym_env=gym_env
     )  # TODO: warning here see coherence with above fixed starting obs
     dumper.add("Start Obs", array_xk)
     current_t = 0  # INFO @REMY: current timestep of the true system
@@ -447,7 +452,7 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
     list_semi_markov_interdecision_epochs = [current_t]
     list_current_rewards = []
 
-    for iteration in range(current_iter, config.num_iters):
+    for iteration in range(current_iter, dict_config.num_iters):
         # CHANGES @STELLA: current_iter has been added by Stella
         logging.info("---" * 5 + f" Start iteration i={iteration} " + "---" * 5)
         logging.info(f"Length of data.x: {len(namespace_data.x)}")
@@ -460,14 +465,14 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
         # exe_path_list can be [] if there are no paths
         # model can be None if it isn't needed here
         array_state_action_next: np.ndarray
-        list_execution_path: list[argparse.Namespace]
+        list_namespace_gp_mpc: list[argparse.Namespace]
         multi_gp_model: MultiGpfsGp
         array_xk: np.ndarray
         interdecision_epochs: int
 
         (
             array_state_action_next,
-            list_execution_path,
+            list_namespace_gp_mpc,
             multi_gp_model,
             array_xk,
             interdecision_epochs,
@@ -476,7 +481,7 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
             # Namespace (list of size n_gp) each Namespace has x, y
             # attributes which are list having size the length of the op
             iteration=iteration,
-            dict_config=config,
+            dict_config=dict_config,
             algo=test_algo,  # INFO @REMY: here is passed the MPC object used;
             # we use the test_algo to not go to far in the time horizon
             list_tuple_domain=list_tuple_domain,
@@ -498,7 +503,10 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
         # ==============================================
         #   Periodically run evaluation and plot
         # ==============================================
-        if iteration % config.eval_frequency == 0 or iteration + 1 == config.num_iters:
+        if (
+            iteration % dict_config.eval_frequency == 0
+            or iteration + 1 == dict_config.num_iters
+        ):
             if multi_gp_model is None and len(namespace_data.x) > 0:
                 multi_gp_model = gp_model_class(gp_model_params, namespace_data)
             # =======================================================================
@@ -506,9 +514,11 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
             #       - see how the MPC policy performs on the real env
             #       - see how well the model fits data from different distributions
             # =======================================================================
-            eval_start_obs, _ = eval_env.reset() if config.fixed_start_obs else None, {}
-            real_paths_mpc = evaluate_mpc(
-                config,
+            eval_start_obs, _ = (
+                eval_env.reset() if dict_config.fixed_start_obs else None
+            ), {}
+            list_namespace_execution_paths_gp_mpc_groundtruth = evaluate_mpc(
+                dict_config,
                 test_algo,
                 multi_gp_model,
                 array_x0,
@@ -533,16 +543,13 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
             #     - Observations
             #     - All of the above
             # ============
-            make_plots(   # TODO: Plot !!!!
+            make_plots(  # TODO: Plot !!!!
                 # function for the evaluation environment
-                list_tuple_domain,
-                list_namespace_true_path,
                 namespace_data,
                 gym_env,
-                config,
-                list_execution_path,
-                real_paths_mpc,
-                array_xk,
+                dict_config,
+                list_namespace_gp_mpc,
+                list_namespace_execution_paths_gp_mpc_groundtruth,
                 dumper,
                 iteration,
                 list_semi_markov_interdecision_epochs,
@@ -561,7 +568,7 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
         done: bool
         info: dict
 
-        if config.alg.rollout_sampling:
+        if dict_config.alg.rollout_sampling:
             # @REMY: step through the environment with the action
             array_xk_next, reward, done, _, info = gym_env.step(array_action)
             # @REMY: increment the time
@@ -602,9 +609,8 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
                 # and outputs a list of size n
                 array_delta_obs: np.ndarray = f_transition_mpc(
                     [array_state_action_next]
-                )[
-                    0
-                ]  # TODO: Change for the rollout case with the step() method
+                )[0]
+                # TODO: Change the above for the rollout case with the step() method
 
                 # @REMY: the next state is the sum of the delta and the current state
                 array_xk_next = (
@@ -679,65 +685,60 @@ def main_original(config: omegaconf.DictConfig, path_barl_data: str):
         print(f"End of iteration {iteration}\n")
 
 
-def configure(config):
+def configure(dict_config):
     # Set plot settings
-    neatplot.set_style()
-    neatplot.update_rc("figure.dpi", 120)
-    neatplot.update_rc("text.usetex", False)
     logging.getLogger("matplotlib.font_manager").disabled = True
 
     # Set random seed
-    seed = config.seed
+    seed = dict_config.seed
     random.seed(seed)  # CHANGES @REMY: add the ramdom module method to set the seed
     np.random.seed(seed)
     tf.random.set_seed(seed)
-    tf.config.run_functions_eagerly(config.tf_eager)
-    tf_dtype = get_tf_dtype(config.tf_precision)
+    tf.config.run_functions_eagerly(dict_config.tf_eager)
+    tf_dtype = get_tf_dtype(dict_config.tf_precision)
     str_dtype = str(tf_dtype).split("'")[1]
     keras.backend.set_floatx(str_dtype)
     gpflow.config.set_default_float(tf_dtype)
 
     # Check fixed_start_obs and num_samples_mc compatability
-    assert (not config.fixed_start_obs) or config.num_samples_mc == 1, (
+    assert (not dict_config.fixed_start_obs) or dict_config.num_samples_mc == 1, (
         f"Need to have a fixed start obs"
-        f" ({config.fixed_start_obs}) or only 1 mc sample"
-        f" ({config.num_samples_mc})"
+        f" ({dict_config.fixed_start_obs}) or only 1 mc sample"
+        f" ({dict_config.num_samples_mc})"
     )  # NOQA
 
 
-def get_env(config: omegaconf.DictConfig):
+def get_env(dict_config: omegaconf.DictConfig):
     # CHANGES @REMY: Start - Add environment kwargs support
     # Check if key exists in config
-    dict_environment_parameters: omegaconf.DictConfig = config.env.get(
+    dict_environment_parameters: omegaconf.DictConfig = dict_config.env.get(
         "environment_parameters", {}
     )
     # CHANGES @REMY: End
-    logging.info(f"ENV NAME: {config.env.name}")
+    logging.info(f"ENV NAME: {dict_config.env.name}")
     gym_env: EnvBARL | gymnasium.Env = gymnasium.make(
-        config.env.name, seed=config.seed, **dict_environment_parameters
+        dict_config.env.name, seed=dict_config.seed, **dict_environment_parameters
     )
     # CHANGES @REMY: Start - Generate a random seed, which random behaviour
     # is controlled by the global np random seed
     # Allows notably to have a different fixed seed for each get_env call
     local_seed: int = np.random.randint(0, np.iinfo(np.int32).max)
-    gym_env.reset(
-        seed=local_seed
-    )
+    gym_env.reset(seed=local_seed)
 
-    if not config.alg.learn_reward:
-        if config.alg.gd_opt:
+    if not dict_config.alg.learn_reward:
+        if dict_config.alg.gd_opt:
             # reward_function: Callable[[np.array, np.array, int], np.array] = (
             #     envs.tf_reward_functions[config.env.name]
             # )
             raise NotImplementedError("# CHANGES @REMY: this is not implemented")
         else:
             reward_function: Callable[[np.array, np.array, int], np.array] = (
-                envs.reward_functions[config.env.name]
+                envs.reward_functions[dict_config.env.name]
             )
     else:
         raise NotImplementedError("# CHANGES @REMY: this is not implemented")
         # reward_function = None
-    if config.normalize_env:
+    if dict_config.normalize_env:
         gym_env: gymnasium.Env = envs.wrappers.NormalizedEnv(gym_env)
         if reward_function is not None:
             reward_function = make_normalized_reward_function(
@@ -745,22 +746,22 @@ def get_env(config: omegaconf.DictConfig):
                 reward_function=reward_function,
             )
         # plot_fn = make_normalized_plot_fn(gym_env, plot_fn)  # TODO: remove this
-    if config.alg.learn_reward:
+    if dict_config.alg.learn_reward:
         raise NotImplementedError("# CHANGES @REMY: this is not implemented")
         # f = get_f_batch_mpc_reward(env, use_info_delta=config.teleport)
     else:
         f_transition_mpc: Callable = get_f_batch_mpc(
-            env=gym_env, use_info_delta=config.teleport
+            env=gym_env, use_info_delta=dict_config.teleport
         )
     update_fn: Callable = make_update_obs_fn(
-        env=gym_env, teleport=config.teleport, use_tf=config.alg.gd_opt
+        env=gym_env, teleport=dict_config.teleport, use_tf=dict_config.alg.gd_opt
     )
     probability_x0 = gym_env.reset
     return gym_env, f_transition_mpc, reward_function, update_fn, probability_x0
 
 
 def get_initial_data(
-    config: omegaconf.DictConfig,
+    dict_config: omegaconf.DictConfig,
     gym_env: EnvBARL,
     f_transition_mpc: Callable,
     list_tuple_domain: list[tuple[float, float]],
@@ -768,17 +769,17 @@ def get_initial_data(
 ) -> Namespace:  # @REMY: the list format is required for "batch" functions
     namespace_data: argparse.Namespace = Namespace()
     # TODO: WARNING: the initial point is sampled again
-    if config.sample_init_initially:
+    if dict_config.sample_init_initially:
         # @REMY: Below data.x type is list[np.array]
         namespace_data.x = [
             np.concatenate(
                 [gym_env.reset()[0], gym_env.action_space.sample()]
             )  # INFO @REMY: the seed is already fixed before
-            for _ in range(config.num_init_data)
+            for _ in range(dict_config.num_init_data)
         ]
     else:
         namespace_data.x = unif_random_sample_domain(
-            list_tuple_domain, config.num_init_data
+            list_tuple_domain, dict_config.num_init_data
         )
 
     namespace_data.y = f_transition_mpc(namespace_data.x)
@@ -792,22 +793,22 @@ def get_initial_data(
 
 
 def get_model(
-    config: omegaconf.DictConfig, gym_env: EnvBARL, obs_dim: int, action_dim: int
+    dict_config: omegaconf.DictConfig, gym_env: EnvBARL, obs_dim: int, action_dim: int
 ) -> Tuple[Type[MultiGpfsGp], Dict[str, Any]]:
     gp_params = {
-        "ls": config.env.gp.ls,
-        "alpha": config.env.gp.alpha,
-        "sigma": config.env.gp.sigma,
+        "ls": dict_config.env.gp.ls,
+        "alpha": dict_config.env.gp.alpha,
+        "sigma": dict_config.env.gp.sigma,
         "n_dimx": obs_dim + action_dim,
     }
-    if config.env.gp.periodic:
+    if dict_config.env.gp.periodic:
         gp_params["kernel_str"] = "rbf_periodic"
         gp_params["periodic_dims"] = gym_env.periodic_dimensions
-        gp_params["period"] = config.env.gp.period
+        gp_params["period"] = dict_config.env.gp.period
     gp_model_params = {
         "n_dimy": obs_dim,
         "gp_params": gp_params,
-        "tf_dtype": get_tf_dtype(config.tf_precision),
+        "tf_dtype": get_tf_dtype(dict_config.tf_precision),
     }
     gp_model_class = BatchMultiGpfsGp
     return gp_model_class, gp_model_params
@@ -815,7 +816,7 @@ def get_model(
 
 # INFO @STELLA: this is where we choose the acquisition function
 def get_acq_fn(
-    config,
+    dict_config,
     # horizon,
     # probability_x0,
     reward_fn,
@@ -825,17 +826,17 @@ def get_acq_fn(
     # gp_model_class,
     gp_model_params,
 ):
-    if config.alg.uncertainty_sampling:
+    if dict_config.alg.uncertainty_sampling:
         acqfn_params = {}
-        if config.alg.open_loop or config.alg.rollout_sampling:
-            if config.alg.joint_eig:
+        if dict_config.alg.open_loop or dict_config.alg.rollout_sampling:
+            if dict_config.alg.joint_eig:
                 acqfn_class = BatchUncertaintySamplingAcqFunction
             else:
                 acqfn_class = SumSetUSAcqFunction
             acqfn_params["gp_model_params"] = gp_model_params
         else:
             acqfn_class = UncertaintySamplingAcqFunction
-    elif config.alg.kgrl or config.alg.pilco or config.alg.kg_policy:
+    elif dict_config.alg.kgrl or dict_config.alg.pilco or dict_config.alg.kg_policy:
         # acqfn_params = {
         #     "num_fs": config.alg.num_fs,
         #     "num_s0": config.alg.num_s0,
@@ -860,7 +861,7 @@ def get_acq_fn(
         #     acqfn_class = KGRLPolicyAcqFunction
         # else:
         #     acqfn_class = PILCOAcqFunction
-    elif config.alg.open_loop_mpc:
+    elif dict_config.alg.open_loop_mpc:
         acqfn_params = {
             "reward_fn": reward_fn,
             "obs_dim": obs_dim,
@@ -868,29 +869,32 @@ def get_acq_fn(
         }
         acqfn_class = RewardSetAcqFunction
     else:
-        acqfn_params = {"n_path": config.n_paths, "crop": True}
-        if not config.alg.rollout_sampling:
+        acqfn_params = {"n_path": dict_config.n_paths, "crop": True}
+        if not dict_config.alg.rollout_sampling:
             # standard barl
             acqfn_class = MultiBaxAcqFunction
         else:
             # new rollout barl
             acqfn_params["gp_model_params"] = gp_model_params
-            if config.alg.joint_eig:
+            if dict_config.alg.joint_eig:
                 acqfn_class = JointSetBaxAcqFunction
             else:
                 acqfn_class = SumSetBaxAcqFunction
                 # CHANGES @REMY: Start - Add the option to use the semimarkov model
-                if getattr(config.alg, "max_interdecision_epochs", None) is not None:
+                if (
+                    getattr(dict_config.alg, "max_interdecision_epochs", None)
+                    is not None
+                ):
                     acqfn_class = MultiBaxAcqFunction
                     acqfn_params["max_interdecision_epochs"] = (
-                        config.alg.max_interdecision_epochs
+                        dict_config.alg.max_interdecision_epochs
                     )
                 # CHANGES @REMY: End
     return acqfn_class, acqfn_params
 
 
 def get_acq_opt(
-    config,
+    dict_config,
     obs_dim,
     action_dim,
     gym_env,
@@ -898,34 +902,34 @@ def get_acq_opt(
     update_fn,
     s0_sampler,
 ):
-    if config.alg.rollout_sampling:
+    if dict_config.alg.rollout_sampling:
         acqopt_params = {
             "obs_dim": obs_dim,
             "action_dim": action_dim,
-            "base_nsamps": config.eigmpc.nsamps,
-            "planning_horizon": config.eigmpc.planning_horizon,
-            "n_elites": config.eigmpc.n_elites,
-            "beta": config.eigmpc.beta,
-            "num_fs": config.alg.num_fs,
-            "gamma": config.eigmpc.gamma,
-            "xi": config.eigmpc.xi,
-            "num_iters": config.eigmpc.num_iters,
-            "actions_per_plan": config.eigmpc.actions_per_plan,
+            "base_nsamps": dict_config.eigmpc.nsamps,
+            "planning_horizon": dict_config.eigmpc.planning_horizon,
+            "n_elites": dict_config.eigmpc.n_elites,
+            "beta": dict_config.eigmpc.beta,
+            "num_fs": dict_config.alg.num_fs,
+            "gamma": dict_config.eigmpc.gamma,
+            "xi": dict_config.eigmpc.xi,
+            "num_iters": dict_config.eigmpc.num_iters,
+            "actions_per_plan": dict_config.eigmpc.actions_per_plan,
             "update_fn": update_fn,
-            "num_s0_samps": config.alg.num_s0_samps,
+            "num_s0_samps": dict_config.alg.num_s0_samps,
             "s0_sampler": s0_sampler,
         }
-        if config.alg.open_loop:
+        if dict_config.alg.open_loop:
             acqopt_params["planning_horizon"] = gym_env.horizon
             acqopt_params["actions_per_plan"] = gym_env.horizon
         acqopt_class = PolicyAcqOptimizer  # INFO @REMY Standard original TIP
         # (TIP = Trajectory Information Planning)
         # CHANGES @REMY: Start - Add the option to use the semimarkov model
-        if getattr(config.alg, "max_interdecision_epochs", None) is not None:
+        if getattr(dict_config.alg, "max_interdecision_epochs", None) is not None:
             acqopt_class = AcqOptimizer  # INFO @REMY: this allows
             # to use a batch of well-chosen candidates
             acqopt_params["max_interdecision_epochs"] = (
-                config.alg.max_interdecision_epochs
+                dict_config.alg.max_interdecision_epochs
             )
         # CHANGES @REMY: End
     else:
@@ -934,7 +938,7 @@ def get_acq_opt(
 
 
 def fit_hypers(
-    config,
+    dict_config,
     fit_data,
     # list_tuple_domain,
     expdir,
@@ -981,9 +985,9 @@ def fit_hypers(
             gp_params = get_gpflow_hypers_from_data(
                 data_fit,
                 print_fit_hypers=False,
-                opt_max_iter=config.env.gp.opt_max_iter,
-                retries=config.gp_fit_retries,
-                sigma=config.env.gp.sigma,
+                opt_max_iter=dict_config.env.gp.opt_max_iter,
+                retries=dict_config.gp_fit_retries,
+                sigma=dict_config.env.gp.sigma,
             )
             logging.info(f"gp_params for output {idx} = {gp_params}")
             gp_params_list.append(gp_params)
@@ -994,7 +998,7 @@ def fit_hypers(
             "alpha": [
                 float(gpp["alpha"]) for gpp in gp_params_list
             ],  # CHANGES @REMY: alpha is clipped to 0
-            "sigma": config.env.gp.sigma,
+            "sigma": dict_config.env.gp.sigma,
             "n_dimx": obs_dim + action_dim,
         }
         gp_model_params = {
@@ -1093,7 +1097,7 @@ def execute_gt_mpc(
         plt_figure_groundtruth: plt.Figure
         plt_axes_groundtruth: plt.Axes | np.ndarray
         plt_figure_groundtruth, plt_axes_groundtruth = (
-            plot_ground_truth.plot_ground_truth(
+            viz.plot_ground_truth.plot_ground_truth(
                 env=env,
                 name_env=dict_config.env.name,
                 namespace_true_path=namespace_true_path,
@@ -1168,7 +1172,7 @@ def get_next_point(
     float,
 ]:
     multi_gp_model: barl.models.gpfs_gp.MultiGpfsGp | None = None
-    list_execution_path: list = []
+    list_namespace_gp_mpc: list = []
     if (len(namespace_data.x) == 0) and (not dict_config.alg.rollout_sampling):
         # TODO: remove second condition above ?
         multi_gp_model: MultiGpfsGp = gp_model_class(gp_model_params, namespace_data)
@@ -1177,7 +1181,7 @@ def get_next_point(
         interdecision_epochs: int = 1
         return (
             np.concatenate([array_xk, action_space.sample()]),
-            list_execution_path,
+            list_namespace_gp_mpc,
             multi_gp_model,
             array_xk,
             interdecision_epochs,
@@ -1292,10 +1296,10 @@ def get_next_point(
             dumper.add(
                 "Sampled Data", list_array_candidate_state_actions, verbose=False
             )
-        list_execution_path = acqfn.exe_path_list
+        list_namespace_gp_mpc = acqfn.exe_path_list
 
         # try:
-        #     list_execution_path = acqfn.exe_path_list
+        #     list_namespace_gp_mpc = acqfn.exe_path_list
         # INFO @REMY: list of Namespace with execution paths
         # of the best trajectories
         # except AttributeError:
@@ -1400,15 +1404,15 @@ def get_next_point(
 
     return (
         array_state_action_next,
-        list_execution_path,
+        list_namespace_gp_mpc,
         multi_gp_model,
         array_xk,
         interdecision_epochs,
     )
 
 
-def evaluate_mpc(
-    config,
+def evaluate_mpc(  # TODO: Understand this function
+    dict_config,
     algo,
     model,
     array_x0,
@@ -1431,25 +1435,25 @@ def evaluate_mpc(
         algo.initialize()  # INFO @REMY: algo is an instance of MPC for instance;
         # initialize variables needed for the GP model
 
-        postmean_fn = make_postmean_fn(model, use_tf=config.alg.gd_opt)
-        if config.eval_bayes_policy:
-            model.initialize_function_sample_list(config.test_mpc.num_fs)
+        postmean_fn = make_postmean_fn(model, use_tf=dict_config.alg.gd_opt)
+        if dict_config.eval_bayes_policy:
+            model.initialize_function_sample_list(dict_config.test_mpc.num_fs)
             policy_params = dict(
                 obs_dim=env.observation_space.low.size,
                 action_dim=env.action_space.low.size,
-                base_nsamps=config.test_mpc.nsamps,
-                planning_horizon=config.test_mpc.planning_horizon,
-                n_elites=config.test_mpc.n_elites,
-                beta=config.test_mpc.beta,
-                gamma=config.test_mpc.gamma,
-                xi=config.test_mpc.xi,
-                num_fs=config.test_mpc.num_fs,
-                num_iters=config.test_mpc.num_iters,
-                actions_per_plan=config.test_mpc.actions_per_plan,
+                base_nsamps=dict_config.test_mpc.nsamps,
+                planning_horizon=dict_config.test_mpc.planning_horizon,
+                n_elites=dict_config.test_mpc.n_elites,
+                beta=dict_config.test_mpc.beta,
+                gamma=dict_config.test_mpc.gamma,
+                xi=dict_config.test_mpc.xi,
+                num_fs=dict_config.test_mpc.num_fs,
+                num_iters=dict_config.test_mpc.num_iters,
+                actions_per_plan=dict_config.test_mpc.actions_per_plan,
                 domain=list_tuple_domain,
                 action_lower_bound=env.action_space.low,
                 action_upper_bound=env.action_space.high,
-                crop_to_domain=config.crop_to_domain,
+                crop_to_domain=dict_config.crop_to_domain,
                 update_fn=update_fn,
                 reward_fn=reward_fn,
                 function_sample_list=model.call_function_sample_list,
@@ -1462,19 +1466,19 @@ def evaluate_mpc(
                 # with the arguments already set
                 algo.execute_mpc,
                 f=postmean_fn,
-                open_loop=config.alg.open_loop,  # INFO @REMY: algo execute MPC
+                open_loop=dict_config.alg.open_loop,  # INFO @REMY: algo execute MPC
                 # is just one step ahead policy
             )
         real_returns = []
         mses = []
-        real_paths_mpc = []
-        pbar = trange(config.num_eval_trials)  # INFO @REMY: config.
+        list_namespace_execution_paths_gp_mpc_groundtruth = []
+        pbar = trange(dict_config.num_eval_trials)  # INFO @REMY: config.
         # CHANGES @REMY: Start - Add multiple start obs
 
         for j in pbar:
             # CHANGES @REMY: Start - Add support for fixed multiple initial states
             if (
-                not config.fixed_start_obs
+                not dict_config.fixed_start_obs
             ):  # INFO @REMY: this is the case for the original BARL algo;
                 # where only one start state is used
                 array_x0 = list_array_x0[j]
@@ -1485,7 +1489,7 @@ def evaluate_mpc(
                     policy,
                     env,
                     start_obs=array_x0,
-                    mpc_pass=not config.eval_bayes_policy,
+                    mpc_pass=not dict_config.eval_bayes_policy,
                     dumper=dumper,  # CHANGES @STELLA
                 )
             )
@@ -1513,7 +1517,7 @@ def evaluate_mpc(
             }
 
             pbar.set_postfix(stats)
-            real_paths_mpc.append(real_path_mpc)
+            list_namespace_execution_paths_gp_mpc_groundtruth.append(real_path_mpc)
         real_returns = np.array(real_returns)
         algo.old_exe_paths = []
         dumper.add("Eval Returns", real_returns, log_mean_std=True)
@@ -1556,7 +1560,7 @@ def evaluate_mpc(
             tf.summary.scalar("Model Likelihood (GT MPC)", gt_mpc_likelihood)
 
     dumper.add("Time/Evaluate MPC policy", timer.time_elapsed)
-    return real_paths_mpc
+    return list_namespace_execution_paths_gp_mpc_groundtruth
 
 
 def get_start_obs(
@@ -1571,147 +1575,93 @@ def get_start_obs(
 
 
 def make_plots(
-    # plot_fn,
-    list_tuple_domain,
-    true_path,
-    data,
-    env,
-    config,
-    list_execution_path,
-    real_paths_mpc,
-    x_next,
+    namespace_data: argparse.Namespace,
+    gym_env: EnvBARL,
+    dict_config: omegaconf.DictConfig,
+    list_namespace_gp_mpc: list[argparse.Namespace],
+    list_namespace_execution_paths_gp_mpc_groundtruth: list[argparse.Namespace],
     dumper,
-    i,
+    iteration: int,
     list_semi_markov_interdecision_epochs,
 ):
-    plot_fn = None
 
-    if len(data.x) == 0:
+    if len(namespace_data.x) == 0:
         return
 
-    # Plot true path and posterior path samples
-    if true_path is not None:  # TODO: do not forget this condition
-        # ax_all, fig_all = plot_fn(true_path, ax_all, fig_all, domain, "true")
-        # INFO @REMY: true_path is the execution path of MPC
-        # on the ground truth dynamics; TODO: plot the 1d version
-        # ax_postmean_1d, fig_postmean_1d, = plot_fn(true_path, ax_postmean_1d,
-        # fig_postmean_1d, domain, "true", env=env)
-        # CHANGES @REMY: plot 1d views of the posterior mean
-        pass
+    # INFO @REMY: true_path is the execution path of MPC
+    # on the ground truth dynamics
 
-    # if ax_all is None:
-    #     return
-    # Plot observations
-    x_obs = make_plot_obs(
-        data.x, env, config.env.normalize_env
-    )  # INFO @REMY: unnormalized observations from the dataset D
-    # scatter(ax_all, x_obs, color="grey", s=10, alpha=0.3)
-    # INFO @REMY: write above the axes
-    plot(
-        ax_obs,
-        x_obs,
-        "o",
-        config.env.name,
-        env,
-        color="k",
-        ms=1,
+    # Plot observations  # TODO: prepare normalisation of the path
+    # x_obs = make_plot_obs(
+    #     data.x, env, dict_config.env.normalize_env
+    # )
+    # INFO @REMY: unnormalize observations from the dataset D
+
+    figure_observation, axes_observation = viz.plot_observations.plot_observations(
+        namespace_data=namespace_data,
+        env=gym_env,
         list_semi_markov_interdecision_epochs=list_semi_markov_interdecision_epochs,
-    )  # INFO @REMY: write above the axes  # CHANGES @REMY:
-    # add the ennvironment name to the plot function
+    )
 
     # Plot execution path posterior samples
-    for (
-        path
-    ) in (
-        list_execution_path
-    ):  # INFO @REMY: here we plot the m state trajectories for each GP_i;
-        # calling multiple time to superimpose the plots
-        # ax_all, fig_all = plot_fn(path, ax_all, fig_all, domain, "samp")
-        # ax_samp, fig_samp = plot_fn(path, ax_samp, fig_samp, domain, "samp")
-        ax_samp_1d, fig_samp_1d = plot_fn(
-            path, ax_samp_1d, fig_samp_1d, list_tuple_domain, "samp_1d", env=env
-        )  # CHANGES @REMY: plot 1d views of the posterior samples
+    # INFO @REMY: here we plot the m state trajectories for each GP_i;
+    figure_gp_mpc, axes_gp_mpc = (
+        viz.plot_gp_mpc_trajectories.plot_gp_mpc_pendulum_trigo(
+            env=gym_env,
+            list_namespace_gp_mpc=list_namespace_gp_mpc,
+        )
+    )
 
-    # plot posterior mean paths
-    for (
-        path
-    ) in (
-        real_paths_mpc
-    ):  # INFO @REMY: real path MPC is the MPC policy on the GPs applied
-        # to the ground truth dynamics, the dynamics is from the ground-truth,
-        # however the policy is from the GP
-        # ax_all, fig_all = plot_fn(path, ax_all, fig_all, domain, "postmean")
-        # ax_postmean, fig_postmean = plot_fn(
-        #     path, ax_postmean, fig_postmean, domain, "postmean"
-        # )
-        ax_postmean_1d, fig_postmean_1d = plot_fn(
-            path,
-            ax_postmean_1d,
-            fig_postmean_1d,
-            list_tuple_domain,
-            "postmean_1d",
-            env=env,
-        )  # CHANGES @REMY: plot 1d views of the posterior mean
+    figure_gp_mpc_groundtruth, axes_gp_mpc_groundtruth = (
+        viz.plot_gp_mpc_groundtruth.plot_gp_mpc_groundtruth_trigo(
+            gym_env,
+            list_namespace_execution_paths_gp_mpc_groundtruth,
+        )
+    )
+
+    # INFO @REMY: real path MPC is the MPC policy on the GPs applied
+    # to the ground truth dynamics, the dynamics is from the ground-truth,
+    # however the policy is from the GP
 
     # CHANGES @REMY: Start - Change colors of lines
-    if config.env.name in ["bacpendulum-semimarkov-v0"]:
-        list_colors = matplotlib.cm.tab20(range(len(real_paths_mpc)))
-        for ax_row in ax_postmean_1d[:2]:
-            for ax_col in ax_row:
-                for idx_color, mpl_line in enumerate(ax_col.get_lines()):
-                    mpl_line.set_color(list_colors[idx_color])
-    # CHANGES @REMY: End
+    # if dict_config.env.name in ["bacpendulum-semimarkov-v0"]:
+    #     list_colors =
+    #     matplotlib.cm.tab20
+    #     (range(len(list_namespace_execution_paths_gp_mpc_groundtruth)))
+    #     for ax_row in ax_postmean_1d[:2]:
+    #         for ax_col in ax_row:
+    #             for idx_color, mpl_line in enumerate(ax_col.get_lines()):
+    #                 mpl_line.set_color(list_colors[idx_color])
+    # CHANGES @REMY: End # TODO: incorporate at some point
 
-    # Plot x_next
-    make_plot_obs(x_next, env, config.env.normalize_env)
-    # scatter(ax_all, x, facecolors="deeppink", edgecolors="k", s=120, zorder=100)
-    # plot(ax_obs, x, "o", mfc="deeppink", mec="k", ms=3, zorder=100)
-
-    try:
-        # set titles if there is a single axes
-        # ax_all.set_title(f"All - Iteration {i}")
-        # ax_postmean.set_title(f"Posterior Mean Eval - Iteration {i}")
-        # ax_samp.set_title(f"Posterior Samples - Iteration {i}")
-        ax_obs.set_title(f"Observations - Iteration {i}")
-    except AttributeError:
-        # set titles for figures if they are multi-axes
-        # fig_all.suptitle(f"All - Iteration {i}")
-        # fig_postmean.suptitle(f"Posterior Mean Eval - Iteration {i}")
-        # fig_samp.suptitle(f"Posterior Samples - Iteration {i}")
-        fig_obs.suptitle(f"Observations - Iteration {i}")
-
-    if config.save_figures:
+    if dict_config.save_figures:
+        path_save: Path
         (dumper.expdir / plot_path).mkdir(parents=True, exist_ok=True)
-        # Save figure at end of evaluation
-        # neatplot.save_figure(
-        # str(dumper.expdir / plot_path / f"all_{i}"), "png", fig=fig_all)
-        # neatplot.save_figure(
-        #     str(dumper.expdir/ plot_path / f"postmean_{i}"), "png", fig=fig_postmean
-        # )
-        # neatplot.save_figure(
-        # str(dumper.expdir / plot_path / f"samp_{i}"), "png", fig=fig_samp)
-        neatplot.save_figure(
-            str(dumper.expdir / plot_path / f"obs_{i}"), "png", fig=fig_obs
-        )
-        neatplot.save_figure(
-            str(dumper.expdir / plot_path / f"samp_1d_{i}"), "png", fig=fig_samp_1d
-        )  # CHANGE @REMY: New line
-        neatplot.save_figure(
-            str(dumper.expdir / plot_path / f"postmean_1d_{i}"),
-            "png",
-            fig=fig_postmean_1d,
-        )  # CHANGE @REMY: New line
+        path_save = dumper.expdir / plot_path / f"obs_{iteration}.png"
+        figure_gp_mpc.savefig(path_save)
+        path_save = dumper.expdir / plot_path / f"gp_mpc_{iteration}.png"
+        figure_gp_mpc.savefig(path_save)
+        path_save = dumper.expdir / plot_path / f"gp_mpc_groundtruth_{iteration}.png"
+        figure_gp_mpc_groundtruth.savefig(path_save)
 
     # CHANGES @REMY: Start - Add tensorboard logging
     with dumper.tf_file_writer.as_default():
-        # tf.summary.image("all", dumper.tf_plot_to_image(fig_all), step=i)
-        # tf.summary.image("postmean", dumper.tf_plot_to_image(fig_postmean), step=i)
-        # tf.summary.image("samp", dumper.tf_plot_to_image(fig_samp), step=i)
-        tf.summary.image("obs", dumper.tf_plot_to_image(fig_obs), step=i)
-        tf.summary.image("samp_1d", dumper.tf_plot_to_image(fig_samp_1d), step=i)
         tf.summary.image(
-            "postmean_1d", dumper.tf_plot_to_image(fig_postmean_1d), step=i
+            "data_set_evolution",
+            dumper.tf_plot_to_image(figure_observation),
+            step=iteration,
         )
+        tf.summary.image(
+            "trajectories_gp_mpc_gp",
+            dumper.tf_plot_to_image(figure_gp_mpc),
+            step=iteration,
+        )
+        tf.summary.image(
+            "trajectories_gp_mpc_groundtruth",
+            dumper.tf_plot_to_image(figure_gp_mpc_groundtruth),
+            step=iteration,
+        )
+    # CHANGES @REMY: End
 
 
 # CHANGES @STELLA: Acquire default samples from predefined run
@@ -1838,8 +1788,6 @@ def sample_forward_points(
         )
 
     return list(matrix_mean_trajectory)
-
-
 # CHANGES @REMY: End
 
 if __name__ == "__main__":
