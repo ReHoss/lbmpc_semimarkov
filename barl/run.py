@@ -15,25 +15,24 @@ Interesting ideas in the original implementation:
 - TODO: Dumping
 - TODO: force interdecision time = 0 and rollout sampling
 - Add in the thesis "a word on normalisation for KS"
-- TODO: Verify loop is workinkg well
-- What about "time_left" ?????
+- TODO: Verify loop is working well
+- What about "time_left" ?
 """
 
 import argparse
-from argparse import Namespace
+
+# from argparse import Namespace
 from pathlib import Path
 import pickle
 import logging
 import numpy as np
 import gymnasium
 import tqdm
-from tqdm import trange
 from functools import partial
 from copy import deepcopy
 import tensorflow as tf
 from tensorflow import keras
-import hydra
-from hydra.core import hydra_config  # INFO @REMY: Added to get the config from hydra
+
 import random
 from matplotlib import pyplot as plt
 import gpflow.config
@@ -62,41 +61,23 @@ from barl.acq.acqoptimize import (
     AcqOptimizer,
     PolicyAcqOptimizer,
 )
-from barl.alg.mpc import MPC
 from barl import envs  # , alg
 from barl.envs.wrappers import (
     NormalizedEnv,
     make_normalized_reward_function,
     make_update_obs_fn,
 )
-from barl.util.misc_util import (
-    Dumper,
-    make_postmean_fn,
-    mse,
-    model_likelihood,
-    get_tf_dtype,
-)
-from barl.util.control_util import (
-    get_f_batch_mpc,
-    # get_f_batch_mpc_reward,
-    compute_return,
-    evaluate_policy,
-)
-from barl.util.domain_util import (
-    unif_random_sample_domain,
-    project_to_domain,
-)  # CHANGES @REMY: Add project to domain case
-from barl.util.timing import Timer
+from barl.util import misc_util
+
+
+# CHANGES @REMY: Add project to domain case
 from barl.policies import BayesMPCPolicy
 
 # CHANGES @REMY: Start - Import for evaluation
 import mlflow  # For logging
-
 # import matplotlib  # For color palette
 import yaml  # For config dumping
-
 # CHANGES @REMY: End
-
 import omegaconf
 
 
@@ -125,11 +106,22 @@ old_sample_points = None
 plot_path = "plots"
 
 
-@hydra.main(
-    config_path="cfg", config_name="config", version_base=None
-)  # CHANGES @REMY: version_base=None is added to clear a warning
-# (see https://hydra.cc/docs/1.2/upgrades/version_base/)
-def main(dict_config: omegaconf.DictConfig):
+def main():
+
+    # Parsing arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-y", "--yaml", type=str, help="The config to feed to the model."
+    )
+    dict_args = parser.parse_args()
+    path_config = dict_args.yaml
+
+    with open(path_config, "r") as file:
+        dict_config: dict = yaml.safe_load(file)
+
+    # Cast the config to a omegaconf.DictConfig
+    dict_config: omegaconf.DictConfig = omegaconf.OmegaConf.create(dict_config)
+
     path_current_script = Path(__file__).parent
     path_mlflow_uri = Path(path_current_script / "experiments" / "mlruns").resolve()
 
@@ -179,31 +171,17 @@ def main(dict_config: omegaconf.DictConfig):
 
         # MLFlow logging.
         mlflow.log_param("_id", run.info.run_id)
-        # MLFlow logging of the config file from hydra
-        dict_config_hydra = (
-            hydra_config.HydraConfig.get()
-        )  # INFO @REMY: get config from hydra
-        mlflow.log_artifact(
-            dict_config_hydra.runtime.output_dir, artifact_path="hydra_config"
-        )
+        mlflow.log_artifact(path_config, artifact_path="config")
 
-        main_original(dict_config, path_barl_data=path_barl_data)
+        start_barl(dict_config, path_barl_data=path_barl_data)
 
 
-def main_original(dict_config: omegaconf.DictConfig, path_barl_data: str):
+def start_barl(dict_config: omegaconf.DictConfig, path_barl_data: str):
     # ==============================================
     #   Define and configure
     # ==============================================
-    dumper = Dumper(dict_config.name, path_expdir=path_barl_data)
+    dumper = barl.util.misc_util.Dumper(dict_config.name, path_expdir=path_barl_data)
     configure(dict_config)
-
-    current_iter: int = 0  # CHANGES @STELLA: I think this is due
-    # to computational limitations, we need to start from a certain iteration
-    if dict_config.resume:
-        current_iter = dumper.retrieve(dict_config.resume)
-    logging.info(
-        f"Starting from iteration {current_iter}"
-    )  # CHANGES @STELLA: end changes
 
     # Resources
     list_hardware_resources: list = tf.config.experimental.list_physical_devices()
@@ -335,7 +313,7 @@ def main_original(dict_config: omegaconf.DictConfig, path_barl_data: str):
     # algo = algo_class(algo_params)
     test_algo: barl.alg.mpc.MPC = algo_class(params=dict_test_algo_params)
 
-    namespace_data: Namespace = get_initial_data(
+    namespace_data: argparse.Namespace = get_initial_data(
         dict_config=dict_config,
         gym_env=gym_env,
         f_transition_mpc=f_transition_mpc,
@@ -345,9 +323,9 @@ def main_original(dict_config: omegaconf.DictConfig, path_barl_data: str):
 
     # Make a test set for model evalution separate from the controller
     logging.info(f"Creating test set of size {dict_config.test_set_size}")
-    test_data: Namespace = Namespace()  # TODO: Replace by dict
+    test_data: argparse.Namespace = argparse.Namespace()  # TODO: Replace by dict
 
-    test_data.x = unif_random_sample_domain(  # list[np.array]
+    test_data.x = barl.util.domain_util.unif_random_sample_domain(  # list[np.array]
         list_tuple_domain, dict_config.test_set_size
     )
 
@@ -417,10 +395,9 @@ def main_original(dict_config: omegaconf.DictConfig, path_barl_data: str):
         # fit_data = Namespace(
         #     x=test_mpc_data.x + test_data.x, y=test_mpc_data.y + test_data.y
         # )
-        fit_data = (
-            Namespace(  # CHANGES @REMY: ignore MPC data as it is too close to zero
-                x=test_data.x, y=test_data.y
-            )
+        fit_data = argparse.Namespace(
+            # CHANGES @REMY: ignore MPC data as it is too close to zero
+            x=test_data.x, y=test_data.y
         )
         gp_params = (
             None if dict_config.fit_hypers else gp_model_params
@@ -452,7 +429,7 @@ def main_original(dict_config: omegaconf.DictConfig, path_barl_data: str):
     list_semi_markov_interdecision_epochs = [current_t]
     list_current_rewards = []
 
-    for iteration in range(current_iter, dict_config.num_iters):
+    for iteration in range(dict_config.num_iters):
         # CHANGES @STELLA: current_iter has been added by Stella
         logging.info("---" * 5 + f" Start iteration i={iteration} " + "---" * 5)
         logging.info(f"Length of data.x: {len(namespace_data.x)}")
@@ -695,7 +672,7 @@ def configure(dict_config):
     np.random.seed(seed)
     tf.random.set_seed(seed)
     tf.config.run_functions_eagerly(dict_config.tf_eager)
-    tf_dtype = get_tf_dtype(dict_config.tf_precision)
+    tf_dtype = barl.util.misc_util.get_tf_dtype(dict_config.tf_precision)
     str_dtype = str(tf_dtype).split("'")[1]
     keras.backend.set_floatx(str_dtype)
     gpflow.config.set_default_float(tf_dtype)
@@ -750,7 +727,7 @@ def get_env(dict_config: omegaconf.DictConfig):
         raise NotImplementedError("# CHANGES @REMY: this is not implemented")
         # f = get_f_batch_mpc_reward(env, use_info_delta=config.teleport)
     else:
-        f_transition_mpc: Callable = get_f_batch_mpc(
+        f_transition_mpc: Callable = barl.util.control_util.get_f_batch_mpc(
             env=gym_env, use_info_delta=dict_config.teleport
         )
     update_fn: Callable = make_update_obs_fn(
@@ -765,9 +742,9 @@ def get_initial_data(
     gym_env: EnvBARL,
     f_transition_mpc: Callable,
     list_tuple_domain: list[tuple[float, float]],
-    dumper: Dumper,
-) -> Namespace:  # @REMY: the list format is required for "batch" functions
-    namespace_data: argparse.Namespace = Namespace()
+    dumper: barl.util.misc_util.Dumper,
+) -> argparse.Namespace:  # @REMY: the list format is required for "batch" functions
+    namespace_data: argparse.Namespace = argparse.Namespace()
     # TODO: WARNING: the initial point is sampled again
     if dict_config.sample_init_initially:
         # @REMY: Below data.x type is list[np.array]
@@ -778,7 +755,7 @@ def get_initial_data(
             for _ in range(dict_config.num_init_data)
         ]
     else:
-        namespace_data.x = unif_random_sample_domain(
+        namespace_data.x = barl.util.domain_util.unif_random_sample_domain(
             list_tuple_domain, dict_config.num_init_data
         )
 
@@ -808,7 +785,7 @@ def get_model(
     gp_model_params = {
         "n_dimy": obs_dim,
         "gp_params": gp_params,
-        "tf_dtype": get_tf_dtype(dict_config.tf_precision),
+        "tf_dtype": barl.util.misc_util.get_tf_dtype(dict_config.tf_precision),
     }
     gp_model_class = BatchMultiGpfsGp
     return gp_model_class, gp_model_params
@@ -959,7 +936,7 @@ def fit_hypers(
     ytrain = x_y[:train_size, xdim:]
     xtest = x_y[train_size:, :xdim]
     ytest = x_y[train_size:, xdim:]
-    fit_data = Namespace(x=xtrain, y=ytrain)
+    fit_data = argparse.Namespace(x=xtrain, y=ytrain)
     if gp_model_params is None:
         assert (
             len(fit_data.x) <= 30000  # CHANGES @STELLA: increase limit
@@ -980,8 +957,10 @@ def fit_hypers(
 
         # Perform hyper fitting
         gp_params_list = []
-        for idx in trange(len(fit_data.y[0])):  # Coordinate-wise (output) fitting
-            data_fit = Namespace(x=fit_data.x, y=[yi[idx] for yi in fit_data.y])
+        for idx in tqdm.trange(len(fit_data.y[0])):  # Coordinate-wise (output) fitting
+            data_fit = argparse.Namespace(
+                x=fit_data.x, y=[yi[idx] for yi in fit_data.y]
+            )
             gp_params = get_gpflow_hypers_from_data(
                 data_fit,
                 print_fit_hypers=False,
@@ -1038,7 +1017,7 @@ def execute_gt_mpc(
     env: EnvBARL,
     f_transition_mpc: Callable,
     list_array_x0: list[np.array],
-) -> Tuple[list[argparse.Namespace], Namespace]:
+) -> Tuple[list[argparse.Namespace], argparse.Namespace]:
 
     # Assert the number of trials is strictly positive
     assert (
@@ -1053,7 +1032,7 @@ def execute_gt_mpc(
     list_namespace_true_path: list = []
     list_returns: list = []
     list_path_lengths: list = []
-    namespace_test_mpc_data: Namespace = Namespace(x=[], y=[])
+    namespace_test_mpc_data: argparse.Namespace = argparse.Namespace(x=[], y=[])
     tqdm_progress_bar = tqdm.trange(dict_config.num_eval_trials)
     for id_eval_trial in tqdm_progress_bar:
         # CHANGES @REMY: Start - Add support for fixed multiple initial states
@@ -1065,7 +1044,7 @@ def execute_gt_mpc(
             true_algo = algo_class(dict_algo_params)
         # CHANGES @REMY: End
         # Run algorithm and extract paths
-        namespace_full_path_x_y: Namespace
+        namespace_full_path_x_y: argparse.Namespace
         tuple_output: Tuple[list[np.array], list[np.array], list[np.array]]
 
         namespace_full_path_x_y, tuple_output = true_algo.run_algorithm_on_f(
@@ -1073,7 +1052,7 @@ def execute_gt_mpc(
         )
         list_namespace_full_paths_x_y.append(namespace_full_path_x_y)
         list_path_lengths.append(len(namespace_full_path_x_y.x))
-        namespace_true_path: Namespace = true_algo.get_exe_path_crop()
+        namespace_true_path: argparse.Namespace = true_algo.get_exe_path_crop()
         list_namespace_true_path.append(namespace_true_path)
 
         # Extract fraction of planning data for namespace_test_mpc_data
@@ -1104,7 +1083,7 @@ def execute_gt_mpc(
             )
         )
 
-        list_returns.append(compute_return(tuple_output[2], 1))
+        list_returns.append(barl.util.control_util.compute_return(tuple_output[2], 1))
         stats = {
             "Mean Return": np.mean(list_returns),
             "Std Return:": np.std(list_returns),
@@ -1274,12 +1253,15 @@ def get_next_point(
             # INFO @REMY: add n_rand points sampled uniformly
             # from the domain in order to have n_rand_acqopt points in total
             # Store returns of posterior samples
-            list_array_candidate_state_actions += unif_random_sample_domain(
-                list_tuple_domain, n=n_rand
+            list_array_candidate_state_actions += (
+                barl.util.domain_util.unif_random_sample_domain(
+                    list_tuple_domain, n=n_rand
+                )
             )
 
             list_posterior_returns: list[float] = [
-                compute_return(output[2], 1) for output in acqfn.output_list
+                barl.util.control_util.compute_return(output[2], 1)
+                for output in acqfn.output_list
             ]
             dumper.add(
                 "Posterior Returns",
@@ -1290,8 +1272,10 @@ def get_next_point(
             # INFO @REMY: this is the classic BARL uniform sampling case
             logging.info("Uniform Sampling")
 
-            list_array_candidate_state_actions = unif_random_sample_domain(
-                list_tuple_domain, n=dict_config.n_rand_acqopt
+            list_array_candidate_state_actions = (
+                barl.util.domain_util.unif_random_sample_domain(
+                    list_tuple_domain, n=dict_config.n_rand_acqopt
+                )
             )
             dumper.add(
                 "Sampled Data", list_array_candidate_state_actions, verbose=False
@@ -1375,7 +1359,9 @@ def get_next_point(
 
         policy_function: Callable = partial(
             algo.execute_mpc,
-            f=make_postmean_fn(multi_gp_model, use_tf=dict_config.alg.gd_opt),
+            f=barl.util.misc_util.make_postmean_fn(
+                multi_gp_model, use_tf=dict_config.alg.gd_opt
+            ),
         )
         array_action_scaled: np.ndarray = policy_function(array_xk)
         array_state_action_next: np.ndarray = np.concatenate(
@@ -1388,7 +1374,9 @@ def get_next_point(
             "since no config.alg.use_acquisition"
             " or config.alg.use_mpc is set."
         )
-        list_xk_next: list[float] = unif_random_sample_domain(list_tuple_domain, 1)[0]
+        list_xk_next: list[float] = barl.util.domain_util.unif_random_sample_domain(
+            list_tuple_domain, 1
+        )[0]
         array_state_action_next: np.ndarray = np.array(list_xk_next)
         interdecision_epochs: int = 1
 
@@ -1429,13 +1417,15 @@ def evaluate_mpc(  # TODO: Understand this function
 ):
     if model is None:
         return
-    with Timer("Evaluate the current MPC policy") as timer:
+    with barl.util.timing.Timer("Evaluate the current MPC policy") as timer:
         # execute the best we can
         # this is required to delete the current execution path
         algo.initialize()  # INFO @REMY: algo is an instance of MPC for instance;
         # initialize variables needed for the GP model
 
-        postmean_fn = make_postmean_fn(model, use_tf=dict_config.alg.gd_opt)
+        postmean_fn = barl.util.misc_util.make_postmean_fn(
+            model, use_tf=dict_config.alg.gd_opt
+        )
         if dict_config.eval_bayes_policy:
             model.initialize_function_sample_list(dict_config.test_mpc.num_fs)
             policy_params = dict(
@@ -1472,7 +1462,7 @@ def evaluate_mpc(  # TODO: Understand this function
         real_returns = []
         mses = []
         list_namespace_execution_paths_gp_mpc_groundtruth = []
-        pbar = trange(dict_config.num_eval_trials)  # INFO @REMY: config.
+        pbar = tqdm.trange(dict_config.num_eval_trials)  # INFO @REMY: config.
         # CHANGES @REMY: Start - Add multiple start obs
 
         for j in pbar:
@@ -1484,7 +1474,8 @@ def evaluate_mpc(  # TODO: Understand this function
                 array_x0 = list_array_x0[j]
             # CHANGES @REMY: End
             real_obs, real_actions, real_rewards = (
-                evaluate_policy(  # INFO @REMY: this applies the MPC policy on
+                barl.util.control_util.evaluate_policy(
+                    # INFO @REMY: this applies the MPC policy on
                     # Gaussian processes to the ground truth environment
                     policy,
                     env,
@@ -1493,9 +1484,9 @@ def evaluate_mpc(  # TODO: Understand this function
                     dumper=dumper,  # CHANGES @STELLA
                 )
             )
-            real_return = compute_return(real_rewards, 1)
+            real_return = barl.util.control_util.compute_return(real_rewards, 1)
             real_returns.append(real_return)
-            real_path_mpc = Namespace()
+            real_path_mpc = argparse.Namespace()
 
             real_path_mpc.x = [  # INFO @REMY: here we reconstruct the
                 # execution path input to be fed to the GP model below
@@ -1509,7 +1500,7 @@ def evaluate_mpc(  # TODO: Understand this function
             real_path_mpc.y_hat = postmean_fn(
                 real_path_mpc.x
             )  # INFO @REMY: here we compute the mean predicted next state delta
-            mses.append(mse(real_path_mpc.y, real_path_mpc.y_hat))
+            mses.append(barl.util.misc_util.mse(real_path_mpc.y, real_path_mpc.y_hat))
             stats = {
                 "Mean Return": np.mean(real_returns),
                 "Std Return:": np.std(real_returns),
@@ -1530,14 +1521,16 @@ def evaluate_mpc(  # TODO: Understand this function
         dumper.add("Model MSE (current real MPC)", current_mpc_mse)
         if test_data is not None:
             test_y_hat = postmean_fn(test_data.x)
-            random_mse = mse(test_data.y, test_y_hat)
-            random_likelihood = model_likelihood(model, test_data.x, test_data.y)
+            random_mse = barl.util.misc_util.mse(test_data.y, test_y_hat)
+            random_likelihood = barl.util.misc_util.model_likelihood(
+                model, test_data.x, test_data.y
+            )
             gt_mpc_y_hat = postmean_fn(namespace_test_mpc_data.x)
-            gt_mpc_mse = mse(
+            gt_mpc_mse = barl.util.misc_util.mse(
                 namespace_test_mpc_data.y, gt_mpc_y_hat
             )  # INFO @REMY: test_mpc_data comes from the GT trajectories
             # at the begininng
-            gt_mpc_likelihood = model_likelihood(
+            gt_mpc_likelihood = barl.util.misc_util.model_likelihood(
                 model, namespace_test_mpc_data.x, namespace_test_mpc_data.y
             )
             dumper.add("Model MSE (random test set)", random_mse)
@@ -1782,12 +1775,16 @@ def sample_forward_points(
         # Project to the domain
         matrix_mean_trajectory = np.array(
             [
-                project_to_domain(array_state_action, domain=list_tuple_domain)
+                barl.util.domain_util.project_to_domain(
+                    array_state_action, domain=list_tuple_domain
+                )
                 for array_state_action in matrix_mean_trajectory
             ]
         )
 
     return list(matrix_mean_trajectory)
+
+
 # CHANGES @REMY: End
 
 if __name__ == "__main__":
