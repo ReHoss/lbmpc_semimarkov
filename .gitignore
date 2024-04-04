@@ -62,14 +62,9 @@ docs/_build/
 
 # virtual envionments
 venvbac/
-venvbarl/
 
 # dump files
 experiments/
 
 # testing
 playground.*
-<<<<<<< Updated upstream
-_*.py
-=======
->>>>>>> Stashed changes
