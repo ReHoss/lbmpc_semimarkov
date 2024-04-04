@@ -2,7 +2,7 @@ import numpy as np
 from .misc_util import batch_function
 import gymnasium as gym
 import logging
-from barl_semimarkov.util.timing import Timer
+from lbmpc_semimarkov.util.timing import Timer
 
 try:
     # from gymnasium.envs.mujoco.mujoco_env import MujocoEnv

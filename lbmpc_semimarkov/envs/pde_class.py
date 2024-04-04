@@ -1,6 +1,7 @@
 """
 Create a class inheriting from gym Env which defines a PDE problem
 """
+
 import abc
 import pathlib
 from typing import Union
@@ -13,17 +14,20 @@ import yaml
 class EnvPDE(gymnasium.Env, abc.ABC):
     metadata = {"render.modes": []}
 
-    def __init__(self,
-                 dtype: str,
-                 seed: int,
-                 dict_pde_config: dict,
-                 dict_sensing_actuation_config: dict,
-                 dict_scaling_constants: dict,
-                 dict_init_condition_config: dict,
-                 dict_reward_config: dict,
-                 path_rendering: Union[str, None],
-                 path_output_data: Union[str, None]):
-        """Abstract class for PDE environments. Must be inherited by all PDE environments.
+    def __init__(
+        self,
+        dtype: str,
+        seed: int,
+        dict_pde_config: dict,
+        dict_sensing_actuation_config: dict,
+        dict_scaling_constants: dict,
+        dict_init_condition_config: dict,
+        dict_reward_config: dict,
+        path_rendering: Union[str, None],
+        path_output_data: Union[str, None],
+    ):
+        """Abstract class for PDE environments. Must be inherited by all PDE
+         environments.
 
 
         Args:
@@ -33,33 +37,48 @@ class EnvPDE(gymnasium.Env, abc.ABC):
                 The mandatory keys are:
                     - "dt" (float): The time step of the PDE. Must be positive.
                     - "ep_length" (int): The length of an episode. Must be positive.
-                    - "control_step_freq" (int): The frequency at which the control is applied. Must be positive.
+                    - "control_step_freq" (int): The frequency at which the control
+                     is applied. Must be positive.
 
-            dict_sensing_actuation_config: The dictionary containing the configuration of sensing and actuation.
+            dict_sensing_actuation_config: The dictionary containing the configuration
+             of sensing and actuation.
 
-            dict_scaling_constants: The dictionary containing the scaling constants of the state, action and obs.
-                Currently, the scaling constants divide the quantities to reduce their variance.
+            dict_scaling_constants: The dictionary containing the scaling constants
+             of the state, action and obs.
+                Currently, the scaling constants divide the quantities
+                 to reduce their variance.
                 The keys are:
                     - "observation" (float): The scaling constant of the observation.
                     - "state" (float): The scaling constant of the state.
                     - "action" (float): The maximum magnitude of the action.
 
-            dict_init_condition_config: The dictionary containing the configuration of the initial condition.
+            dict_init_condition_config: The dictionary containing the configuration
+             of the initial condition.
 
-            dict_reward_config: The dictionary containing the configuration of the reward.:
+            dict_reward_config: The dictionary containing the configuration
+             of the reward.
 
-            path_rendering: The path to the folder where the rendering will be saved. The rendering is done by writing
-                the state of the system in a csv file to be read by an external csv renderer.
-            path_output_data: The path where to write all the trajectories of the system. Set to None will not write.
+            path_rendering: The path to the folder where the rendering will be saved.
+             The rendering is done by writing
+                the state of the system in a csv file to be read
+                 by an external csv renderer.
+            path_output_data: The path where to write all the trajectories
+             of the system. Set to None will not write.
         """
-        # Assert config dictionaries contain the required keys dt, ep_length and control_step_freq
+        # Assert config dictionaries contain the required keys dt,
+        # ep_length and control_step_freq
         set_keys_pde_config = {"dt", "ep_length", "control_step_freq"}
         set_dict_scaling_constants = {"state", "observation", "action"}
-        assert set_keys_pde_config.issubset(dict_pde_config.keys()), "Missing key: dict_pde_config"
-        assert set_dict_scaling_constants.issubset(dict_scaling_constants.keys()), "Missing key: dict_scaling_constants"
+        assert set_keys_pde_config.issubset(
+            dict_pde_config.keys()
+        ), "Missing key: dict_pde_config"
+        assert set_dict_scaling_constants.issubset(
+            dict_scaling_constants.keys()
+        ), "Missing key: dict_scaling_constants"
 
         # Define the environment's attributes
-        self.initial_seed = seed  # Named like this to avoid conflict with the seed attribute of the super class
+        self.initial_seed = seed  # Named like this to avoid conflict
+        # with the seed attribute of the super class
         self.dt = dict_pde_config["dt"]
         self.ep_length = dict_pde_config["ep_length"]
         self.control_step_freq = dict_pde_config["control_step_freq"]
@@ -73,14 +92,17 @@ class EnvPDE(gymnasium.Env, abc.ABC):
         self.path_output_data = path_output_data
 
         # Record scaling factors for state, observation and reward
-        self.state_min_value = - dict_scaling_constants["state"]
+        self.state_min_value = -dict_scaling_constants["state"]
         self.state_max_value = dict_scaling_constants["state"]
-        self.observation_min_value = - dict_scaling_constants["observation"]
+        self.observation_min_value = -dict_scaling_constants["observation"]
         self.observation_max_value = dict_scaling_constants["observation"]
         self.action_max_value = dict_scaling_constants["action"]
 
         # Check if dtype string is 32 or 64 bits
-        assert dtype in ["float32", "float64"], "dtype must be either float32 or float64"
+        assert dtype in [
+            "float32",
+            "float64",
+        ], "dtype must be either float32 or float64"
         # Set the dtype, as the Box space needs those objects to prevent warnings
         self.dtype = np.float32 if dtype == "float32" else np.float64
 
@@ -103,15 +125,18 @@ class EnvPDE(gymnasium.Env, abc.ABC):
     # noinspection DuplicatedCode
     def write_dynamic_config(self):
         """Write the scaling constants in a yaml file.
-            TODO: this my be removed because the scaling constants are now contained in the configuration files.
-            TODO: which are written in the output directory.
+        TODO: this my be removed because the scaling constants are now contained
+         in the configuration files.
+        TODO: which are written in the output directory.
         """
 
         # Build dict and .item() convert from np.float to built-in float.
-        dict_data = dict(state_min_value=self.state_min_value,
-                         state_max_value=self.state_max_value,
-                         observation_min_value=self.observation_min_value,
-                         observation_max_value=self.observation_max_value)
+        dict_data = dict(
+            state_min_value=self.state_min_value,
+            state_max_value=self.state_max_value,
+            observation_min_value=self.observation_min_value,
+            observation_max_value=self.observation_max_value,
+        )
 
         if self.path_output_data is not None:
             path_directory = f"{self.path_output_data}/dynamic_constants"
@@ -132,8 +157,14 @@ class EnvPDE(gymnasium.Env, abc.ABC):
             array_normalised_obs (np.ndarray): The scaled state.
 
         """
-        array_normalised_obs = 2 * (
-                (array_obs - self.state_min_value) / (self.state_max_value - self.state_min_value)) - 1
+        array_normalised_obs = (
+            2
+            * (
+                (array_obs - self.state_min_value)
+                / (self.state_max_value - self.state_min_value)
+            )
+            - 1
+        )
         return array_normalised_obs
 
     def unscale_state(self, array_obs: np.array):
@@ -147,23 +178,30 @@ class EnvPDE(gymnasium.Env, abc.ABC):
         Returns:
             array_unnormalised (np.ndarray): The unscaled state.
         """
-        array_unnormalised = (array_obs + 1) / 2 * (self.state_max_value - self.state_min_value) + self.state_min_value
+        array_unnormalised = (array_obs + 1) / 2 * (
+            self.state_max_value - self.state_min_value
+        ) + self.state_min_value
         return array_unnormalised
 
     def scale_observation(self, array_obs: np.array):
-        array_normalised_obs = \
-            2 * ((array_obs - self.observation_min_value) / (
-                    self.observation_max_value - self.observation_min_value)) - 1
+        array_normalised_obs = (
+            2
+            * (
+                (array_obs - self.observation_min_value)
+                / (self.observation_max_value - self.observation_min_value)
+            )
+            - 1
+        )
         return array_normalised_obs
 
     def unscale_observation(self, array_obs: np.array):
-        array_unnormalised = \
-            (array_obs + 1) / 2 * (self.observation_max_value - self.observation_min_value) + self.observation_min_value
+        array_unnormalised = (array_obs + 1) / 2 * (
+            self.observation_max_value - self.observation_min_value
+        ) + self.observation_min_value
         return array_unnormalised
 
     def unscale_action(self, array_action):
-        """Unscale the action to be between -action_max_value and action_max_value.
-        """
+        """Unscale the action to be between -action_max_value and action_max_value."""
         return array_action * self.action_max_value
 
     def scale_action(self, array_action):

@@ -1,7 +1,7 @@
 # CHANGES @REMY: Start
 experiments_cache/
-cfg/full_single_file/batch/
-cfg/full_single_file/archives
+config/full_single_file/batch/
+config/full_single_file/archives
 # CHANGES @REMY: Start
 
 # Byte-compiled / optimized / DLL files

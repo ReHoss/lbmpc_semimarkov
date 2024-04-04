@@ -5,7 +5,7 @@ from gymnasium import spaces
 from gymnasium.utils import seeding
 import numpy as np
 
-from envs.archives import barl_interface_env
+from envs import barl_interface_env
 
 DEFAULT_X = np.pi
 DEFAULT_Y = 1.0

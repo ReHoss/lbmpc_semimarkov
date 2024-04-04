@@ -4,7 +4,7 @@ import argparse
 import numpy as np
 
 from typing import Tuple
-from envs.archives import barl_interface_env
+from envs import barl_interface_env
 
 
 def plot_gp_mpc(
