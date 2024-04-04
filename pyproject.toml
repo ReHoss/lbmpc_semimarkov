@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lbmpc_semimarkov"
+version = "0.0.1"
+authors = [
+    { name = "Hosseinkhan Boucher Rémy", email = "remy.hosseinkhan@universite-paris-saclay.fr" },
+]
+description = "A Bayesian Adaptive Reinforcement Learning extension to Semi-Markov Decision Process"
+readme = "README.md"
+keywords = ["Bayesian Optimisation", "Model Predictive Control", "Semi-Markov Decision Process"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Development Status :: 2 - Pre-Alpha"
+]
+
+dependencies = [
+    "cma",
+    "colorednoise",
+    "pystan",
+    "mlflow==1.27.0",
+    "gpflow_sampling @ git+https://github.com/j-wilson/GPflowSampling.git@develop",
+    "gymnasium",
+    "scikit-learn",
+    "tqdm",
+    "gpflow",
+    "matplotlib",
+    "pyyaml",
+    "jax",
+    "jaxlib",
+    "matplotlib",
+    "omegaconf",
+    "pystan",
+    "tf_keras",
+    "scipy"
+]
+
+[project.optional-dependencies]
+notebooks = [
+    "seaborn",
+    "tbparse"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["barl_semimarkov"]
+namespaces = true
