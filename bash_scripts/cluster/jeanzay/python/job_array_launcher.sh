@@ -8,8 +8,6 @@ NAME_JOB_ARRAY_SCRIPT="job_array_batch_xp.slurm"
 # Alias for workdir on jeanzay
 WORKDIR=$WORK
 
-PATH_VENV_BIN="$PATH_CONTENT_ROOT"/venv/"$V_ENV_NAME"/bin/activate
-# PATH_CONDA_BIN=/gpfs7kro/gpfslocalsup/pub/anaconda-py3/2021.05/condabin/conda
 PATH_PARENT=$(
   cd "$(dirname "${BASH_SOURCE[0]}")" || exit
   pwd -P
@@ -63,8 +61,8 @@ echo
 # Create the log directory for the current config file
 mkdir -p "$PATH_LOG_DIR"/"$CONFIG_FILE_NAME"
 
-# Create MLFlow experiments given the xp_name entry from the first yaml file in PATH_FOLDER_CONFIGS
-#echo "Creating MLFlow experiments..."
+# Create MLFlow data given the xp_name entry from the first yaml file in PATH_FOLDER_CONFIGS
+#echo "Creating MLFlow data..."
 #echo
 
 # Get the first yaml file in PATH_FOLDER_CONFIGS with find program
@@ -78,9 +76,9 @@ export MLFLOW_TRACKING_URI=file:"$PATH_CONTENT_ROOT"/experiments/mlruns
 
 echo "MLFlow tracking URI: $MLFLOW_TRACKING_URI"
 
-# Create the MLFlow experiments
+# Create the MLFlow data
 # If last command failed, then the experiment already exists
-#if ! mlflow experiments create --experiment-name "$XP_NAME"; then
+#if ! mlflow data create --experiment-name "$XP_NAME"; then
 #  echo "Experiment $XP_NAME already exists (or command failed?)."
 #  echo
 #else
@@ -90,10 +88,13 @@ echo "MLFlow tracking URI: $MLFLOW_TRACKING_URI"
 
 
 # Set defaults values for the sbatch options
+# --- Number of CPUs per task ---
 S_BATCH_CPU_PER_TASK=4
+
 # --- Time limit ---
-S_BATCH_TIME=19:59:00
+#S_BATCH_TIME=19:59:00
 # S_BATCH_TIME=1:59:00
+S_BATCH_TIME=5:00:00
 #S_BATCH_TIME=48:00:00
 #S_BATCH_TIME=00:10:00
 # --- Partition ---

@@ -112,4 +112,4 @@ sbatch \
   --account="$S_BATCH_ACCOUNT" \
   "$PATH_PARENT"/slurm_script/"$NAME_JOB_SCRIPT"
 
-# TODO: Add MLFlow entry to store the resulting data from experiments !
+# TODO: Add MLFlow entry to store the resulting data from data !

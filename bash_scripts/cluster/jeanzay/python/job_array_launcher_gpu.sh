@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Name of the project
-NAME_PROJECT="drloc-sb3"
+NAME_PROJECT="doe4rl"
 # Name of the job array script
 NAME_JOB_ARRAY_SCRIPT="job_array_batch_xp.slurm"
 
@@ -17,7 +17,7 @@ PATH_PARENT=$(
 PATH_CONTENT_ROOT="$WORKDIR"/pycharm_remote_project/"$NAME_PROJECT"
 # Path of the python script to run
 # shellcheck disable=SC2034
-PATH_PYTHON_SCRIPT="$PATH_CONTENT_ROOT"/src/main.py
+PATH_PYTHON_SCRIPT="$PATH_CONTENT_ROOT"/run.py
 
 # Get the name of the conda environment
 CONDA_ENV=$(cat "$PATH_CONTENT_ROOT"/bash_scripts/conda_env_name.txt)
@@ -56,7 +56,7 @@ echo
 # Create the log directory for the current config file
 mkdir -p "$PATH_LOG_DIR"/"$CONFIG_FILE_NAME"
 
-# Create MLFlow experiments given the xp_name entry from the first yaml file in PATH_FOLDER_CONFIGS
+# Create MLFlow data given the xp_name entry from the first yaml file in PATH_FOLDER_CONFIGS
 echo "Creating MLFlow experiments..."
 echo
 
@@ -69,9 +69,9 @@ XP_NAME=$(grep -oP '(?<=xp_name: ).*' "$PATH_CONFIG_FILE")
 # Set the MLFlow tracking URI
 export MLFLOW_TRACKING_URI=file:"$PATH_CONTENT_ROOT"/data/mlruns
 
-# Create the MLFlow experiments
+# Create the MLFlow data
 # If last command failed, then the experiment already exists
-if ! $PATH_CONDA_BIN run --no-capture-output --name "$CONDA_ENV" mlflow experiments create --experiment-name "$XP_NAME"; then
+if ! $PATH_CONDA_BIN run --no-capture-output --name "$CONDA_ENV" mlflow data create --experiment-name "$XP_NAME"; then
   echo "Experiment $XP_NAME already exists (or command failed?)."
   echo
 else

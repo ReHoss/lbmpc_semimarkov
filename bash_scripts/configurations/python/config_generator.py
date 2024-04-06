@@ -6,7 +6,7 @@ import pathlib
 import itertools
 
 text_yaml_config_file = """
-name: 2023_12_08_pendulum_sm_action_0.5_ep_length_300_num_iters_100
+name: pendulum_semimarkov_trigo_rollout_kernel_unitary
 num_eval_trials: 5
 eval_frequency: 2
 resume: false
@@ -18,18 +18,25 @@ env:
     periodic: false
     opt_max_iter: 10
     ls:
-    - - 272.74
-      - 8.24
-      - 172.12
-    - - 0.04
-      - 1.90
-      - 75.03
+    - - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    - - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    - - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
     alpha:
-    - 0.03
-    - 13.94
+    - 1.0
+    - 1.0
+    - 1.0
     sigma: 0.0011
   tf_precision: 64
-  name: "bacpendulum-semimarkov-new-v0"
+  name: bacpendulum-trigo-v0
   mpc:
     nsamps: 25
     planning_horizon: 2
@@ -76,14 +83,13 @@ alg:
   sampling_pool: false
   sampling_pool_perc: 0.0
   compare_mode: false
-  simple_rollout_sampling: false # CHANGES @STELLA
+  simple_rollout_sampling: false
   learn_reward: false
   num_iters: 4000
   use_acquisition: true
   rollout_sampling: true
   n_rand_acqopt: 1000
   use_mpc: false
-  # CHANGES @REMY Below
   n_semimarkov_dt: 4
 mpc:
   nsamps: ${env.mpc.nsamps}
@@ -115,7 +121,7 @@ test_mpc:
   num_fs: 15
 num_iters: 100
 eval_bayes_policy: false
-seed: 94
+seed: 0
 fixed_start_obs: false
 num_samples_mc: ${alg.num_samples_mc}
 num_init_data: 1

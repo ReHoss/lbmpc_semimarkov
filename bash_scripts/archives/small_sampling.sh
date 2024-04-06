@@ -1,4 +1,4 @@
 # python run.py -m name=opt_pendulum_smallsampling alg=opt_barl n_rand_acqopt=100 num_iters=10 eval_frequency=10 env=pendulum seed="range(5)" hydra/launcher=joblib
-# python run.py -m name=origin_pendulum_smallsampling alg=barl n_rand_acqopt=100 num_iters=200 eval_frequency=10 env=pendulum seed="range(5)" hydra/launcher=joblib
+# python run.py -m name=origin_pendulum_smallsampling alg=lbmpc_semimarkov n_rand_acqopt=100 num_iters=200 eval_frequency=10 env=pendulum seed="range(5)" hydra/launcher=joblib
 python run.py -m name=test_compare alg=barl n_rand_acqopt=5 num_iters=10 eval_frequency=10 env=pendulum seed="range(2)" hydra/launcher=joblib
 python run.py -m name=test_compare alg=barl n_rand_acqopt=5 num_iters=10 eval_frequency=10 env=pendulum seed="range(2)" hydra/launcher=joblib

@@ -25,6 +25,8 @@ if [ -z "$WORKDIR" ]; then
 fi
 
 PATH_PARENT=$( cd "$(dirname "${BASH_SOURCE[0]}")" || exit ; pwd -P )
+
+# Path to the project's content root directory
 PATH_CONTENT_ROOT="$WORKDIR"/pycharm_remote_project/"$NAME_PROJECT"
 
 # Get the venv name from the command line
@@ -77,6 +79,9 @@ echo
 # Add the project root to the PYTHONPATH
 export PYTHONPATH="${PYTHONPATH}:$PATH_CONTENT_ROOT"
 
+# Get the path to the config file that is broadcasted by the sbatch command
+echo PATH_CONFIG_FILE: "$PATH_CONFIG_FILE"
+echo
 
 # Split the arguments of the python script with mapfile
 # ARGS_PYTHON_SCRIPT environment variable is also broadcasted
@@ -85,5 +90,4 @@ IFS=" " read -r -a LIST_ARGS_PYTHON_SCRIPT <<< "$ARGS_PYTHON_SCRIPT"
 # Run the main script
 echo Running the script "$PATH_PYTHON_SCRIPT" with the following arguments: "$ARGS_PYTHON_SCRIPT"
 python "$PATH_PYTHON_SCRIPT" "${LIST_ARGS_PYTHON_SCRIPT[@]}"
-#$PATH_CONDA_BIN run --no-capture-output -n "$CONDA_ENV" python "$PATH_PYTHON_SCRIPT" "${LIST_ARGS_PYTHON_SCRIPT[@]}"
 echo

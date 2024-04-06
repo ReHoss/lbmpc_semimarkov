@@ -95,13 +95,15 @@ echo PATH_CONFIG: "$PATH_CONFIG"
 echo
 
 # Sleep for 15 seconds to avoid conflicts with other jobs if the job array id is not zero
-SLEEP_TIME=15
+SLEEP_TIME=30
 if [ "$SLURM_ARRAY_TASK_ID" -eq 0 ]; then
     SLEEP_TIME=0
 fi
 
+
+
 # Add linearly a multiple of 5 seconds to the sleep time depending on the job array id
-SLEEP_TIME=$((SLEEP_TIME + SLURM_ARRAY_TASK_ID * 4))
+SLEEP_TIME=$((SLEEP_TIME + SLURM_ARRAY_TASK_ID * 5))
 
 echo Sleeping for "$SLEEP_TIME" seconds
 echo
