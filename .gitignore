@@ -64,7 +64,7 @@ docs/_build/
 venvbac/
 
 # dump files
-experiments/
+data/
 
 # testing
 playground.*
