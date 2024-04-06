@@ -1,70 +1,21 @@
-# CHANGES @REMY: Start
-experiments_cache/
-config/full_single_file/batch/
-config/full_single_file/archives
-# CHANGES @REMY: Start
+# Git
+.gitattributes
 
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# misc data copying script
-get_data.sh
-
-# C extensions
-*.so
-
-# Jupyter notebook
+# Jupyter Notebooks
 .ipynb_checkpoints
 
-# Vim
-*.sw*
+# Project tree
+archives
+data/*
+venv/*
+configs/batch
 
-# IntelliJ's  
+# PyCharm
+*.pyc
+**/*.pyc
+.idea/workspace.xml
 .idea
 
-# Mac
-*.DS_Store
-
-# VSCode
-.vscode
-
-# Results / data
-*hide
-*hide_*
-*save
-*/save_*
-*saved
-*/saved_*
-notebooks/results/*
-notebooks/cache/*
-models/*
-*.zip
-*.out
-*.csv
-
-# Python
-*pylintrc*
-# *.pkl
-
-# Build
-build/*
-*.egg-info
-
-# Sphinx documentation
-docs/_build/
-
-# Misc images
-*.png
-*.pdf
-*.txt
-
-# virtual envionments
-venvbac/
-
-# dump files
-data/
-
-# testing
-playground.*
+# Keep the folder
+!data/.gitkeep
+!venv/.gitkeep

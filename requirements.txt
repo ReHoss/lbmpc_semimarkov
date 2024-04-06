@@ -1,0 +1,22 @@
+cma
+colorednoise
+pystan
+mlflow==1.27.0
+gpflow_sampling @ git+https://github.com/j-wilson/GPflowSampling.git@develop
+gymnasium
+scikit-learn
+tqdm
+gpflow
+matplotlib
+pyyaml
+jax
+jaxlib
+omegaconf
+tf_keras
+numpy
+tensorflow
+scipy
+
+# For notebooks
+seaborn
+tbparse
