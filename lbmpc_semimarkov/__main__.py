@@ -105,7 +105,7 @@ def main():
     dict_config: omegaconf.DictConfig = omegaconf.OmegaConf.create(dict_config)
 
     path_current_script = Path(__file__).parent
-    path_mlflow_uri = Path(path_current_script / "experiments" / "mlruns").resolve()
+    path_mlflow_uri = Path(path_current_script / "data" / "mlruns").resolve()
 
     print(f"Name of the experiment: {dict_config['name']}")
     name_xp = dict_config["name"]  # Get the name of the experiment
