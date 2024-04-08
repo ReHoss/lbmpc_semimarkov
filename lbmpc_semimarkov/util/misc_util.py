@@ -15,7 +15,35 @@ from scipy.stats import norm
 # CHANGES @REMY: Start - Tensorboard logging
 import io
 import matplotlib.pyplot as plt
+import random
+
+import gpflow
+import omegaconf
+
+import lbmpc_semimarkov
 # CHANGES @REMY: End - Tensorboard logging
+
+def configure_seed_dtypes(dict_config: omegaconf.DictConfig) -> None:
+    # Set plot settings
+    logging.getLogger("matplotlib.font_manager").disabled = True
+
+    # Set random seed
+    seed = dict_config.seed
+    random.seed(seed)  # CHANGES @REMY: add the ramdom module method to set the seed
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+    tf.config.run_functions_eagerly(dict_config.tf_eager)
+    tf_dtype = lbmpc_semimarkov.util.misc_util.get_tf_dtype(dict_config.tf_precision)
+    str_dtype = str(tf_dtype).split("'")[1]
+    tf.keras.backend.set_floatx(str_dtype)
+    gpflow.config.set_default_float(tf_dtype.as_numpy_dtype())
+
+    # Check fixed_start_obs and num_samples_mc compatability
+    assert (not dict_config.fixed_start_obs) or dict_config.num_samples_mc == 1, (
+        f"Need to have a fixed start obs"
+        f" ({dict_config.fixed_start_obs}) or only 1 mc sample"
+        f" ({dict_config.num_samples_mc})"
+    )  # NOQA
 
 def dict_to_namespace(params):
     """

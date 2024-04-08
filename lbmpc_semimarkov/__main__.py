@@ -21,8 +21,6 @@ Interesting ideas in the original implementation:
 
 import argparse
 
-# from argparse import Namespace
-import pickle
 import random
 import logging
 import copy
@@ -35,12 +33,12 @@ import tensorflow as tf
 
 
 from matplotlib import pyplot as plt
-import gpflow.config
 import sklearn
 
 
 import lbmpc_semimarkov
 import visualisation
+import envs
 
 from lbmpc_semimarkov.acq.acquisition import (
     MultiBaxAcqFunction,
@@ -64,28 +62,6 @@ import omegaconf
 
 from pathlib import Path
 from typing import Callable, TypedDict, Type, Tuple, Dict, Any
-
-
-# Declare a type EnvBARL with a mandatory attribute horizon
-# This is used to ensure that the environment has a horizon attribute
-
-
-class EnvBARL(gymnasium.Env):
-    def __init__(self, horizon: int, periodic_dimensions: list[int]):
-        self.horizon: int = horizon  # TODO: Improve this
-        self.periodic_dimensions: list[int] = periodic_dimensions
-        super().__init__()
-
-
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-
-# CHANGES @STELLA: global sampling pool of (s,a) pairs
-_sampling_pool = []
-# CHANGES @STELLA: variables for keeping track of eig evolution
-old_eig_points = []
-old_point = None
-old_sample_points = None
-plot_path = "plots"
 
 
 def main():
@@ -165,7 +141,7 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
     dumper = lbmpc_semimarkov.util.misc_util.Dumper(
         dict_config.name, path_expdir=path_barl_data
     )
-    configure(dict_config)
+    lbmpc_semimarkov.util.misc_util.configure_seed_dtypes(dict_config)
 
     # Resources
     list_hardware_resources: list = tf.config.experimental.list_physical_devices()
@@ -174,9 +150,9 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
     # Instantiate environment and create functions for dynamics, plotting,
     # rewards, state updates
 
-    tuple_barl_env_objects: tuple[EnvBARL, Callable, Callable, Callable, Callable] = (
-        get_env(dict_config=dict_config)
-    )
+    tuple_barl_env_objects: tuple[
+        envs.barl_interface_env.EnvBARL, Callable, Callable, Callable, Callable
+    ] = envs.barl_interface_env.get_env(dict_config=dict_config)
     gym_env, f_transition_mpc, reward_function, update_fn, probability_x0 = (
         tuple_barl_env_objects
     )
@@ -194,8 +170,8 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
     # CHANGES @STELLA: evaluation environment
 
     tuple_barl_env_objects_eval: tuple[
-        EnvBARL, Callable, Callable, Callable, Callable
-    ] = get_env(dict_config=dict_config)
+        envs.barl_interface_env.EnvBARL, Callable, Callable, Callable, Callable
+    ] = envs.barl_interface_env.get_env(dict_config=dict_config)
     eval_env, _, eval_reward_function, _, _ = tuple_barl_env_objects_eval
 
     # CHANGES @REMY: Start - Check the semimarkov horizon parameter
@@ -256,7 +232,7 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
         "dict_test_algo_params",
         {
             "start_obs": np.ndarray,
-            "env": EnvBARL,
+            "env": envs.barl_interface_env.EnvBARL,
             "reward_function": Callable,
             "project_to_domain": Callable,
             "base_nsamps": int,
@@ -507,7 +483,7 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
             #     - Observations
             #     - All of the above
             # ============
-            make_plots(  # TODO: Plot !!!!
+            visualisation.make_plots.make_plots(  # TODO: Plot !!!!
                 # function for the evaluation environment
                 namespace_data,
                 gym_env,
@@ -649,86 +625,9 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
         print(f"End of iteration {iteration}\n")
 
 
-def configure(dict_config: omegaconf.DictConfig) -> None:
-    # Set plot settings
-    logging.getLogger("matplotlib.font_manager").disabled = True
-
-    # Set random seed
-    seed = dict_config.seed
-    random.seed(seed)  # CHANGES @REMY: add the ramdom module method to set the seed
-    np.random.seed(seed)
-    tf.random.set_seed(seed)
-    tf.config.run_functions_eagerly(dict_config.tf_eager)
-    tf_dtype = lbmpc_semimarkov.util.misc_util.get_tf_dtype(dict_config.tf_precision)
-    str_dtype = str(tf_dtype).split("'")[1]
-    tf.keras.backend.set_floatx(str_dtype)
-    gpflow.config.set_default_float(tf_dtype)
-
-    # Check fixed_start_obs and num_samples_mc compatability
-    assert (not dict_config.fixed_start_obs) or dict_config.num_samples_mc == 1, (
-        f"Need to have a fixed start obs"
-        f" ({dict_config.fixed_start_obs}) or only 1 mc sample"
-        f" ({dict_config.num_samples_mc})"
-    )  # NOQA
-
-
-def get_env(dict_config: omegaconf.DictConfig):
-    # CHANGES @REMY: Start - Add environment kwargs support
-    # Check if key exists in config
-    dict_environment_parameters: omegaconf.DictConfig = dict_config.env.get(
-        "environment_parameters", {}
-    )
-    # CHANGES @REMY: End
-    logging.info(f"ENV NAME: {dict_config.env.name}")
-    gym_env: EnvBARL | gymnasium.Env = gymnasium.make(
-        dict_config.env.name, seed=dict_config.seed, **dict_environment_parameters
-    )
-    # CHANGES @REMY: Start - Generate a random seed, which random behaviour
-    # is controlled by the global np random seed
-    # Allows notably to have a different fixed seed for each get_env call
-    local_seed: int = np.random.randint(0, np.iinfo(np.int32).max)
-    gym_env.reset(seed=local_seed)
-
-    if not dict_config.alg.learn_reward:
-        if dict_config.alg.gd_opt:
-            # reward_function: Callable[[np.array, np.array, int], np.array] = (
-            #     envs.tf_reward_functions[config.env.name]
-            # )
-            raise NotImplementedError("# CHANGES @REMY: this is not implemented")
-        else:
-            reward_function: Callable[[np.array, np.array, int], np.array] = (
-                lbmpc_semimarkov.envs.reward_functions[dict_config.env.name]
-            )
-    else:
-        raise NotImplementedError("# CHANGES @REMY: this is not implemented")
-        # reward_function = None
-    if dict_config.normalize_env:
-        gym_env: gymnasium.Env = lbmpc_semimarkov.envs.wrappers.NormalizedEnv(gym_env)
-        if reward_function is not None:
-            reward_function = (
-                lbmpc_semimarkov.envs.wrappers.make_normalized_reward_function(
-                    norm_env=gym_env,
-                    reward_function=reward_function,
-                )
-            )
-        # plot_fn = make_normalized_plot_fn(gym_env, plot_fn)  # TODO: remove this
-    if dict_config.alg.learn_reward:
-        raise NotImplementedError("# CHANGES @REMY: this is not implemented")
-        # f = get_f_batch_mpc_reward(env, use_info_delta=config.teleport)
-    else:
-        f_transition_mpc: Callable = lbmpc_semimarkov.util.control_util.get_f_batch_mpc(
-            env=gym_env, use_info_delta=dict_config.teleport
-        )
-    update_fn: Callable = lbmpc_semimarkov.envs.wrappers.make_update_obs_fn(
-        env=gym_env, teleport=dict_config.teleport, use_tf=dict_config.alg.gd_opt
-    )
-    probability_x0 = gym_env.reset
-    return gym_env, f_transition_mpc, reward_function, update_fn, probability_x0
-
-
 def get_initial_data(
     dict_config: omegaconf.DictConfig,
-    gym_env: EnvBARL,
+    gym_env: envs.barl_interface_env.EnvBARL,
     f_transition_mpc: Callable,
     list_tuple_domain: list[tuple[float, float]],
     dumper: lbmpc_semimarkov.util.misc_util.Dumper,
@@ -759,7 +658,10 @@ def get_initial_data(
 
 
 def get_model(
-    dict_config: omegaconf.DictConfig, gym_env: EnvBARL, obs_dim: int, action_dim: int
+    dict_config: omegaconf.DictConfig,
+    gym_env: envs.barl_interface_env.EnvBARL,
+    obs_dim: int,
+    action_dim: int,
 ) -> Tuple[Type[lbmpc_semimarkov.models.gpfs_gp.MultiGpfsGp], Dict[str, Any]]:
     gp_params = {
         "ls": dict_config.env.gp.ls,
@@ -1000,7 +902,7 @@ def execute_gt_mpc(
     dict_algo_params: Dict[str, Any],
     dict_config: omegaconf.DictConfig,
     dumper: lbmpc_semimarkov.util.misc_util.Dumper,
-    env: EnvBARL,
+    env: envs.barl_interface_env.EnvBARL,
     f_transition_mpc: Callable,
     list_array_x0: list[np.array],
 ) -> Tuple[list[argparse.Namespace], argparse.Namespace]:
@@ -1398,7 +1300,7 @@ def get_next_point(
 
 
 def evaluate_mpc(  # TODO: Understand this function
-    dict_config,
+    dict_config: omegaconf.DictConfig,
     algo,
     model,
     array_x0,
@@ -1562,7 +1464,9 @@ def evaluate_mpc(  # TODO: Understand this function
 
 
 def get_start_obs(
-    dict_config: omegaconf.DictConfig, array_x0: np.ndarray, gym_env: EnvBARL
+    dict_config: omegaconf.DictConfig,
+    array_x0: np.ndarray,
+    gym_env: envs.barl_interface_env.EnvBARL,
 ) -> np.array:
     if dict_config.fixed_start_obs:  # INFO @REMY: next state delta
         return array_x0.copy()
@@ -1570,117 +1474,6 @@ def get_start_obs(
         return None
     else:
         return gym_env.reset()[0]
-
-
-def make_plots(
-    namespace_data: argparse.Namespace,
-    gym_env: EnvBARL,
-    dict_config: omegaconf.DictConfig,
-    list_namespace_gp_mpc: list[argparse.Namespace],
-    list_namespace_execution_paths_gp_mpc_groundtruth: list[argparse.Namespace],
-    dumper,
-    iteration: int,
-    list_semi_markov_interdecision_epochs,
-):
-
-    if len(namespace_data.x) == 0:
-        return
-
-    # INFO @REMY: true_path is the execution path of MPC
-    # on the ground truth dynamics
-
-    # Plot observations  # TODO: prepare normalisation of the path
-    # x_obs = make_plot_obs(
-    #     data.x, env, dict_config.env.normalize_env
-    # )
-    # INFO @REMY: unnormalize observations from the dataset D
-
-    figure_observation, axes_observation = (
-        visualisation.plot_observations.plot_observations(
-            namespace_data=namespace_data,
-            env=gym_env,
-            list_semi_markov_interdecision_epochs=list_semi_markov_interdecision_epochs,
-        )
-    )
-
-    # Plot execution path posterior samples
-    # INFO @REMY: here we plot the m state trajectories for each GP_i;
-    figure_gp_mpc, axes_gp_mpc = (
-        visualisation.plot_gp_mpc_trajectories.plot_gp_mpc_pendulum_trigo(
-            env=gym_env,
-            list_namespace_gp_mpc=list_namespace_gp_mpc,
-        )
-    )
-
-    figure_gp_mpc_groundtruth, axes_gp_mpc_groundtruth = (
-        visualisation.plot_gp_mpc_groundtruth.plot_gp_mpc_groundtruth_trigo(
-            gym_env,
-            list_namespace_execution_paths_gp_mpc_groundtruth,
-        )
-    )
-
-    # INFO @REMY: real path MPC is the MPC policy on the GPs applied
-    # to the ground truth dynamics, the dynamics is from the ground-truth,
-    # however the policy is from the GP
-
-    # CHANGES @REMY: Start - Change colors of lines
-    # if dict_config.env.name in ["bacpendulum-semimarkov-v0"]:
-    #     list_colors =
-    #     matplotlib.cm.tab20
-    #     (range(len(list_namespace_execution_paths_gp_mpc_groundtruth)))
-    #     for ax_row in ax_postmean_1d[:2]:
-    #         for ax_col in ax_row:
-    #             for idx_color, mpl_line in enumerate(ax_col.get_lines()):
-    #                 mpl_line.set_color(list_colors[idx_color])
-    # CHANGES @REMY: End # TODO: incorporate at some point
-
-    if dict_config.save_figures:
-        path_save: Path
-        (dumper.expdir / plot_path).mkdir(parents=True, exist_ok=True)
-        path_save = dumper.expdir / plot_path / f"obs_{iteration}.png"
-        figure_gp_mpc.savefig(path_save)
-        path_save = dumper.expdir / plot_path / f"gp_mpc_{iteration}.png"
-        figure_gp_mpc.savefig(path_save)
-        path_save = dumper.expdir / plot_path / f"gp_mpc_groundtruth_{iteration}.png"
-        figure_gp_mpc_groundtruth.savefig(path_save)
-
-    # CHANGES @REMY: Start - Add tensorboard logging
-    with dumper.tf_file_writer.as_default():
-        tf.summary.image(
-            "data_set_evolution",
-            dumper.tf_plot_to_image(figure_observation),
-            step=iteration,
-        )
-        tf.summary.image(
-            "trajectories_gp_mpc_gp",
-            dumper.tf_plot_to_image(figure_gp_mpc),
-            step=iteration,
-        )
-        tf.summary.image(
-            "trajectories_gp_mpc_groundtruth",
-            dumper.tf_plot_to_image(figure_gp_mpc_groundtruth),
-            step=iteration,
-        )
-    # CHANGES @REMY: End
-
-
-# CHANGES @STELLA: Acquire default samples from predefined run
-def get_default_samples(iteration: int, n: int) -> list:
-    cwd = str(Path.cwd()).split(r"/")
-    seed_n = cwd[-1]
-    base_path = r"/".join(cwd[:-4])
-    experiment_path = (
-        rf"{base_path}/experiments_cache/barl_pooling/iters_200_samples_1000"
-    )
-    info_path = rf"{experiment_path}/{seed_n}/info.pkl"
-    try:
-        with open(info_path, "rb") as f:
-            data = pickle.load(f)
-            logging.info(f"Loaded Default Samples from {info_path}")
-    except Exception as err:
-        logging.info(err)
-        raise FileNotFoundError(f"Default pooling path {info_path} not found")
-    return data["Sampled Data"][iteration][:n]
 
 
 # CHANGES @REMY: Start - Add function to sample forward points
@@ -1695,7 +1488,7 @@ def sample_forward_points(
     Sample points from the forward path distribution
     """
     # Sample initial (x, a) pairs
-    gym_env: EnvBARL = acqopt.acqfunction.algorithm.params.env
+    gym_env: envs.barl_interface_env.EnvBARL = acqopt.acqfunction.algorithm.params.env
 
     assert isinstance(gym_env.observation_space, gymnasium.spaces.Box)
     assert isinstance(gym_env.action_space, gymnasium.spaces.Box)

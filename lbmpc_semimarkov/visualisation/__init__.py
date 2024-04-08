@@ -4,5 +4,6 @@ __all__ = [
     "plot_observations",
     "plot_gp_mpc_trajectories",
     "plot_ground_truth",
+    "make_plots"
 ]
 TUPLE_ENVIRONMENTS_NAME = ("bacpendulum-trigo-v0", "ks-v0")

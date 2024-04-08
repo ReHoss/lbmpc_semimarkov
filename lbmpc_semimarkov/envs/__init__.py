@@ -10,9 +10,11 @@ from envs.archives.pilco_cartpole import (
 from envs.archives.lava_path import LavaPathEnv, lava_path_reward, ShortLavaPathEnv
 from envs.archives.weird_gain import WeirdGainEnv, weird_gain_reward, WeirderGainEnv
 
+from envs import barl_interface_env
+
 from . import wrappers
 
-__all__ = [wrappers]
+__all__ = [wrappers, barl_interface_env]
 
 # register each environment we wanna use
 register(
