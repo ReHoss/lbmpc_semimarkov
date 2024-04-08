@@ -21,22 +21,20 @@ classifiers = [
 dependencies = [
     "cma",
     "colorednoise",
-    "pystan",
-    "mlflow==1.27.0",
+    "gpflow",
     "gpflow_sampling @ git+https://github.com/j-wilson/GPflowSampling.git@develop",
     "gymnasium",
-    "scikit-learn",
-    "tqdm",
-    "gpflow",
-    "matplotlib",
-    "pyyaml",
     "jax",
     "jaxlib",
     "matplotlib",
+    "mlflow==1.27.0",
     "omegaconf",
     "pystan",
+    "pyyaml",
+    "scikit-learn",
+    "scipy",
     "tf_keras",
-    "scipy"
+    "tqdm",
 ]
 
 [project.optional-dependencies]
@@ -46,5 +44,5 @@ notebooks = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["barl_semimarkov"]
+include = ["lbmpc_semimarkov"]
 namespaces = true
