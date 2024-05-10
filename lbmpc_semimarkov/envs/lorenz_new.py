@@ -5,9 +5,8 @@ from gymnasium import spaces
 from gymnasium.utils import seeding
 from scipy import integrate
 
-from envs import pde_class
-from utils import cost_functions
-from utils import renderer
+from lbmpc_semimarkov.envs import pde_class
+from lbmpc_semimarkov.envs.utils import cost_functions, renderer
 
 global_dtype = "float64"
 

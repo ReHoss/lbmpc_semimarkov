@@ -1,29 +1,31 @@
 from os import path
 
-import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.utils import seeding
 import numpy as np
+import numpy.typing
 
-from envs import barl_interface_env
+from lbmpc_semimarkov.envs import wrappers
+
+from typing import Union
 
 DEFAULT_X = np.pi
 DEFAULT_Y = 1.0
 
 
 # noinspection DuplicatedCode
-class PendulumEnvTrigo(barl_interface_env.EnvBARL, gym.Env):
+class PendulumEnvTrigo(wrappers.EnvBARL):
     metadata = {"render_modes": ["human", "rgb_array"], "video.frames_per_second": 30}
     name_environment = "bacpendulum-trigo-v0"
 
     def __init__(
         self,
-        seed,
-        dtype,
-        dict_pde_config,
-        dict_init_condition_config,
-        dict_scaling_constants,
-        render_mode=None,
+        seed: int,
+        dtype: str,
+        dict_pde_config: dict,
+        dict_init_condition_config: dict,
+        dict_scaling_constants: dict,
+        render_mode: Union[str, None] = None,
     ):
 
         # Assert dict_pde_config contains the right keys
@@ -53,6 +55,7 @@ class PendulumEnvTrigo(barl_interface_env.EnvBARL, gym.Env):
         # self.name_delay_distribution = "uniform"
         self.time = None
         self.current_step_index = 0  # INFO @REMY: this should be bounded by horizon
+        self.dtype = dtype
 
         # Set initial condition parameters
         self.init_cond_type = dict_init_condition_config["init_cond_type"]
@@ -81,6 +84,8 @@ class PendulumEnvTrigo(barl_interface_env.EnvBARL, gym.Env):
         # Set gym env spaces  # INFO @REMY: CFO means "change from original"
 
         self.max_angle = self.max_speed * self.horizon * self.dt
+        state_high = np.array([np.pi, self.max_speed], dtype=dtype)
+        state_low = np.array([-np.pi, -self.max_speed], dtype=dtype)
         observation_high = np.array([1, 1, self.max_speed], dtype=dtype)  # CFO
         observation_low = np.array(
             [-1, -1, -self.max_speed], dtype=dtype
@@ -88,8 +93,13 @@ class PendulumEnvTrigo(barl_interface_env.EnvBARL, gym.Env):
 
         action_high = np.array([self.max_torque], dtype=dtype)  # INFO @REMY: CFO
         action_low = np.array([-self.max_torque], dtype=dtype)  # INFO @REMY: CFO
-        self.action_space = spaces.Box(low=action_low, high=action_high, dtype=dtype)
-        self.observation_space = spaces.Box(
+        self.action_space: spaces.Box = spaces.Box(
+            low=action_low, high=action_high, dtype=dtype
+        )
+        self.state_space: spaces.Box = spaces.Box(
+            low=state_low, high=state_high, dtype=dtype
+        )
+        self.observation_space: spaces.Box = spaces.Box(
             low=observation_low, high=observation_high, dtype=dtype
         )
         self.reset()
@@ -97,8 +107,16 @@ class PendulumEnvTrigo(barl_interface_env.EnvBARL, gym.Env):
         # To comply with custom gymnasium envs
         self.action_max_value = dict_scaling_constants["action"]
         self.total_time_upper_bound = self.horizon
-        super(barl_interface_env.EnvBARL, self).__init__()
-        super().__init__()
+        super().__init__(
+            action_max_value=self.action_max_value,
+            action_space=self.action_space,
+            dt=self.dt,
+            horizon=self.horizon,
+            list_periodic_dimensions=self.periodic_dimensions,
+            observation_space=self.observation_space,
+            state_space=self.state_space,
+            total_time_upper_bound=self.total_time_upper_bound,
+        )
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
@@ -108,8 +126,6 @@ class PendulumEnvTrigo(barl_interface_env.EnvBARL, gym.Env):
         """
         Here, P( x_t+1, \tau_t+1 | x_t, \tau_t, u_t ) is modelled.
         """
-        # INFO @STELLA: this is where the real environment is queried,
-        # we will need this call count. ARLEADY EXISTS
         th, thdot = self.state  # th := theta
 
         assert (
@@ -154,7 +170,7 @@ class PendulumEnvTrigo(barl_interface_env.EnvBARL, gym.Env):
         )
         # delta_s = np.array([unnorm_newth - th, newthdot - thdot])
 
-        self.state = np.array([newth, newthdot]).astype(np.float64)
+        self.state = np.array([newth, newthdot])
         done = False
 
         array_observation = self._get_obs()
@@ -180,17 +196,18 @@ class PendulumEnvTrigo(barl_interface_env.EnvBARL, gym.Env):
             theta = np.arctan2(obs[1], obs[0])
             self.state = np.array([theta, obs[2]])
 
+        self.state = self.state.astype(self.dtype)
+
         self.current_step_index = (
             0  # INFO @REMY: this should be bounded by self.horizon
         )
         self.time = 0.0  # INFO @REMY: added by Remy from the original
         self.last_u = None
-        self.state = np.float64(self.state)
         return self._get_obs(), {}
 
     def _get_obs(self):
         theta, thetadot = self.state
-        return np.array([np.cos(theta), np.sin(theta), thetadot], dtype=np.float32)
+        return np.array([np.cos(theta), np.sin(theta), thetadot], dtype=self.dtype)
 
     def render(self):
         if self.viewer is None:
@@ -224,23 +241,29 @@ class PendulumEnvTrigo(barl_interface_env.EnvBARL, gym.Env):
             self.viewer.close()
             self.viewer = None
 
+    @staticmethod
+    def reward_function_barl(
+        matrix_state_action: np.ndarray,
+        matrix_next_state: np.ndarray,
+        current_step: int,
+    ) -> numpy.typing.NDArray[float]:
+        del current_step
+        # Assert x has 3 dimensions
+        assert (
+            matrix_state_action.shape[-1] == 4
+        ), f"x.shape={matrix_state_action.shape} should have 4 dimensions"
+        cos_th = matrix_next_state[..., 0]
+        sin_th = matrix_next_state[..., 1]
+
+        th = np.arctan2(sin_th, cos_th)
+        thdot = matrix_next_state[..., 2]
+        u = matrix_state_action[..., 3]
+        # INFO @REMY: here we shift by one index as the original
+        costs = (angle_normalize(th) - np.pi) ** 2 + 0.1 * thdot**2 + 0.001 * (u**2)
+        return -costs
+
 
 # INFO @REMY: x is supposed to live in [-\pi, \pi]
 # units while originally (books) it is in [0, 2\pi]
 def angle_normalize(x):
     return x % (2 * np.pi)  # INFO @REMY: dynamics is centered
-
-
-# noinspection PyUnusedLocal,DuplicatedCode
-def pendulum_trigo_reward(x, next_obs, current_step):
-    del current_step
-    # Assert x has 3 dimensions
-    assert x.shape[-1] == 4, f"x.shape={x.shape} should have 4 dimensions"
-    cos_th = next_obs[..., 0]
-    sin_th = next_obs[..., 1]
-
-    th = np.arctan2(sin_th, cos_th)
-    thdot = next_obs[..., 2]
-    u = x[..., 3]  # INFO @REMY: here we shift by one index as the original
-    costs = (angle_normalize(th) - np.pi) ** 2 + 0.1 * thdot**2 + 0.001 * (u**2)
-    return -costs

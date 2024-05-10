@@ -1,8 +1,7 @@
 import numpy as np
 from scipy import fft
 
-import utils
-
+from lbmpc_semimarkov.envs.utils import utils
 
 def exponentially_weighted_penalty(
     t_max: float,
