@@ -6,7 +6,7 @@ using a squared exponential kernel, and fixed sigma.
 import time
 import pickle
 import pathlib
-import pystan
+import stan
 
 # To stop pystan-produced matplotlib logging output
 import logging
@@ -25,7 +25,7 @@ def get_stanmodel(recompile=False, verbose=True):
 
     if recompile:
         starttime = time.time()
-        model = pystan.StanModel(model_code=get_model_code())
+        model = stan.StanModel(model_code=get_model_code())
         buildtime = time.time() - starttime
         with open(model_path, "wb") as f:
             pickle.dump(model, f)
@@ -72,4 +72,7 @@ def get_model_code():
 
 
 if __name__ == "__main__":
-    get_model()
+    # CHANGES @REMY: - Start - Commented out the following line
+    # get_model()
+    # CHANGES @REMY: - End -
+    pass

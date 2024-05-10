@@ -8,7 +8,7 @@ import numpy as np
 
 from .simple_gp import SimpleGp
 from .stan.gp_fixedsig import get_stanmodel
-from .gp.gp_utils import kern_exp_quad
+from .gp.gp_utils import kern_exp_quad_ard
 from ..util.misc_util import dict_to_namespace, suppress_stdout_stderr
 from ..util.domain_util import unif_random_sample_domain
 
@@ -25,7 +25,7 @@ class StanGp(SimpleGp):
 
         # Set self.params
         self.params.name = getattr(params, "name", "StanGp")
-        self.params.kernel = getattr(params, "kernel", kern_exp_quad)
+        self.params.kernel = getattr(params, "kernel", kern_exp_quad_ard)
         self.params.ig1 = getattr(params, "ig1", 4.0)
         self.params.ig2 = getattr(params, "ig2", 3.0)
         self.params.n1 = getattr(params, "n1", 1.0)
