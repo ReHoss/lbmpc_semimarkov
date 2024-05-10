@@ -9,15 +9,14 @@ Interesting ideas in the original implementation:
 - Knowledge Gradient RL, PILCO, kg_policy
 
 
-# TODO: Global
-
-- requirements.txt
 - TODO: Dumping
 - TODO: force interdecision time = 0 and rollout sampling
 - Add in the thesis "a word on normalisation for KS"
 - TODO: Verify loop is working well
 - What about "time_left" ?
 """
+
+import pathlib
 
 import argparse
 
@@ -35,7 +34,7 @@ import tensorflow as tf
 from matplotlib import pyplot as plt
 import sklearn
 
-
+import envs.utils.utils
 import lbmpc_semimarkov
 import visualisation
 import envs
@@ -80,8 +79,11 @@ def main():
     # Cast the config to an omegaconf.DictConfig
     dict_config: omegaconf.DictConfig = omegaconf.OmegaConf.create(dict_config)
 
-    path_current_script = Path(__file__).parent
-    path_mlflow_uri = Path(path_current_script / "data" / "mlruns").resolve()
+    path_current_script: pathlib.Path = Path(__file__).parent
+    path_project_root: pathlib.Path = path_current_script.parent.resolve()
+    path_mlflow_uri: pathlib.Path = Path(
+        path_project_root / "data" / "mlruns"
+    ).resolve()
 
     print(f"Name of the experiment: {dict_config['name']}")
     name_xp = dict_config["name"]  # Get the name of the experiment
@@ -110,19 +112,21 @@ def main():
         Path(path_barl_data).mkdir()
 
         # Cast the config to a nested dictionary
-        def flatten_dict(dd, separator="_", prefix=""):
+        def flatten_dict(
+            nested_dict: omegaconf.DictConfig, separator: str = "_", prefix: str = ""
+        ):
             return (
                 {
                     prefix + separator + k if prefix else k: v
-                    for kk, vv in dd.items()
+                    for kk, vv in nested_dict.items()
                     for k, v in flatten_dict(vv, separator, kk).items()
                 }
-                if isinstance(dd, dict)
-                else {prefix: dd}
+                if isinstance(nested_dict, dict)
+                else {prefix: nested_dict}
             )
 
         dict_config_flattened = flatten_dict(
-            omegaconf.OmegaConf.to_container(dict_config, resolve=True)
+            nested_dict=omegaconf.OmegaConf.to_container(dict_config, resolve=True)
         )
         for key, value in dict_config_flattened.items():
             mlflow.log_param(key, value)
@@ -151,8 +155,8 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
     # rewards, state updates
 
     tuple_barl_env_objects: tuple[
-        envs.barl_interface_env.EnvBARL, Callable, Callable, Callable, Callable
-    ] = envs.barl_interface_env.get_env(dict_config=dict_config)
+        envs.wrappers.EnvBARL, Callable, Callable, Callable, Callable
+    ] = envs.utils.utils.get_env(dict_config=dict_config)
     gym_env, f_transition_mpc, reward_function, update_fn, probability_x0 = (
         tuple_barl_env_objects
     )
@@ -170,8 +174,8 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
     # CHANGES @STELLA: evaluation environment
 
     tuple_barl_env_objects_eval: tuple[
-        envs.barl_interface_env.EnvBARL, Callable, Callable, Callable, Callable
-    ] = envs.barl_interface_env.get_env(dict_config=dict_config)
+        envs.wrappers.EnvBARL, Callable, Callable, Callable, Callable
+    ] = envs.utils.utils.get_env(dict_config=dict_config)
     eval_env, _, eval_reward_function, _, _ = tuple_barl_env_objects_eval
 
     # CHANGES @REMY: Start - Check the semimarkov horizon parameter
@@ -206,12 +210,19 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
 
     # CHANGES @REMY: End
 
+    gym_env_observation_space: gymnasium.spaces.Box = gym_env.get_wrapper_attr(
+        "observation_space"
+    )
+    gym_env_action_space: gymnasium.spaces.Box = gym_env.get_wrapper_attr(
+        "action_space"
+    )
+
     # Set domain
     array_state_action_domain_lower_bound: np.ndarray = np.concatenate(
-        [gym_env.observation_space.low, gym_env.action_space.low]
+        [gym_env_observation_space.low, gym_env_action_space.low]
     )
     array_state_action_domain_upper_bound: np.ndarray = np.concatenate(
-        [gym_env.observation_space.high, gym_env.action_space.high]
+        [gym_env_observation_space.high, gym_env_action_space.high]
     )
     list_tuple_domain: list[tuple[float, float]] = [
         tuple_bound
@@ -232,7 +243,7 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
         "dict_test_algo_params",
         {
             "start_obs": np.ndarray,
-            "env": envs.barl_interface_env.EnvBARL,
+            "env": envs.wrappers.EnvBARL,
             "reward_function": Callable,
             "project_to_domain": Callable,
             "base_nsamps": int,
@@ -392,7 +403,7 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
     list_semi_markov_interdecision_epochs = [current_t]
     list_current_rewards = []
 
-    for iteration in range(dict_config.num_iters):
+    for iteration in range(dict_config.num_iters):  # TODO
         # CHANGES @STELLA: current_iter has been added by Stella
         logging.info("---" * 5 + f" Start iteration i={iteration} " + "---" * 5)
         logging.info(f"Length of data.x: {len(namespace_data.x)}")
@@ -516,9 +527,6 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
             # @REMY: get the delta between the current state and the next state
             array_delta_obs: np.ndarray = array_xk_next - array_xk
 
-            # Set the new state
-            array_xk = array_xk_next
-
             # CHANGES @REMY: Start - Add the option to use the semimarkov model
             # @REMY: the below array is what the acquisition function wants us to sample
             # However, since our model is not perfect, errors will be committed on the
@@ -536,8 +544,11 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
             # @REMY: setting the temp state-action pair to be the current state and the
             # constant action
             array_state_action_next = np.concatenate(
-                [array_xk, array_piecewise_constant_action]
+                [array_xk_next, array_piecewise_constant_action]
             )
+
+            # Set the new state
+            array_xk = array_xk_next
 
             # @REMY: This loop is to simulate the interdecision process
             for _ in range(interdecision_epochs - 1):
@@ -557,18 +568,20 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
                     array_delta_obs + array_xk
                 )  # Sum the derivative to the state
 
-                # @REMY: Update the current state
-                array_xk = array_xk_next
-
                 # Add reward to the list
-                reward = reward_function(array_state_action_next, array_xk)
+                reward = reward_function(
+                    array_state_action_next, array_xk_next, current_t
+                )
                 list_current_rewards.append(reward)
 
                 # @REMY: the next state-action pair is the concatenation
                 # of the next state and the constant action
                 array_state_action_next = np.concatenate(
-                    [array_xk, array_piecewise_constant_action]
+                    [array_xk_next, array_piecewise_constant_action]
                 )
+
+                # @REMY: Update the current state to the next state
+                array_xk = array_xk_next
 
                 logging.info(
                     f"Instantaneous reward state-action pair collected during"
@@ -578,6 +591,9 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
 
             # Note there is no projection to the domain here
             # Dump the estimated vs real next state difference
+            assert array_state_action_next_bootstrapped[obs_dim:] == array_action
+            assert array_state_action_next[obs_dim:] == array_action
+
             mean_difference_state_boostrap = np.mean(
                 np.abs(
                     array_state_action_next_bootstrapped[:obs_dim]
@@ -599,7 +615,7 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
             if current_t >= gym_env.horizon:
                 logging.info(
                     "End of the episode in the rollout sampling case,"
-                    " stopping the program"
+                    " stopping the program as the horizon is reached."
                 )
                 return
             # CHANGES @REMY: End
@@ -627,7 +643,7 @@ def start_run(dict_config: omegaconf.DictConfig, path_barl_data: str):
 
 def get_initial_data(
     dict_config: omegaconf.DictConfig,
-    gym_env: envs.barl_interface_env.EnvBARL,
+    gym_env: envs.wrappers.EnvBARL,
     f_transition_mpc: Callable,
     list_tuple_domain: list[tuple[float, float]],
     dumper: lbmpc_semimarkov.util.misc_util.Dumper,
@@ -659,7 +675,7 @@ def get_initial_data(
 
 def get_model(
     dict_config: omegaconf.DictConfig,
-    gym_env: envs.barl_interface_env.EnvBARL,
+    gym_env: envs.wrappers.EnvBARL,
     obs_dim: int,
     action_dim: int,
 ) -> Tuple[Type[lbmpc_semimarkov.models.gpfs_gp.MultiGpfsGp], Dict[str, Any]]:
@@ -902,7 +918,7 @@ def execute_gt_mpc(
     dict_algo_params: Dict[str, Any],
     dict_config: omegaconf.DictConfig,
     dumper: lbmpc_semimarkov.util.misc_util.Dumper,
-    env: envs.barl_interface_env.EnvBARL,
+    env: envs.wrappers.EnvBARL,
     f_transition_mpc: Callable,
     list_array_x0: list[np.array],
 ) -> Tuple[list[argparse.Namespace], argparse.Namespace]:
@@ -1466,7 +1482,7 @@ def evaluate_mpc(  # TODO: Understand this function
 def get_start_obs(
     dict_config: omegaconf.DictConfig,
     array_x0: np.ndarray,
-    gym_env: envs.barl_interface_env.EnvBARL,
+    gym_env: envs.wrappers.EnvBARL,
 ) -> np.array:
     if dict_config.fixed_start_obs:  # INFO @REMY: next state delta
         return array_x0.copy()
@@ -1488,7 +1504,7 @@ def sample_forward_points(
     Sample points from the forward path distribution
     """
     # Sample initial (x, a) pairs
-    gym_env: envs.barl_interface_env.EnvBARL = acqopt.acqfunction.algorithm.params.env
+    gym_env: envs.wrappers.EnvBARL = acqopt.acqfunction.algorithm.params.env
 
     assert isinstance(gym_env.observation_space, gymnasium.spaces.Box)
     assert isinstance(gym_env.action_space, gymnasium.spaces.Box)

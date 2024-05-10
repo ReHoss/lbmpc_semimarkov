@@ -147,7 +147,7 @@ class MPC(BatchAlgorithm):
         the algorithm is complete, return None.
         """
         if len(self.exe_path.x) > 0:  # INFO @REMY: this part updates self.samples dones and self.traj_samples
-            self.process_prev_output()  # INFO @REMY: Simply updata self.traj_states from the recently collected execution path; as execution path contains all the necessary information
+            self.process_prev_output()  # INFO @REMY: Simply update self.traj_states from the recently collected execution path; as execution path contains all the necessary information
         # at this point the *_done should be correct
         if self.samples_done and self.iter_num + 1 == self.params.num_iters:  # INFO @REMY: this is the flag that indicates the MPC algorithm has planned for the whole MPC horizon
             shift_actions = self.save_planned_actions()  # INFO @REMY: this function possibly save in self.shifted_actions the best action trajectories, shift it to synchronise with self.current_t, fill the remaining with random actions, reset self.current_t_planning to zero, moreover it updates self.current_t
