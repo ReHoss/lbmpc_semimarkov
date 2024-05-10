@@ -5,14 +5,14 @@ PATH_PARENT=$( cd "$(dirname "${BASH_SOURCE[0]}")" || exit ; pwd -P )
 # Path of the root of the project
 PATH_CONTENT_ROOT="$PATH_PARENT"/../..
 
-V_ENV_NAME="venvbarl"
+V_ENV_NAME="venv_barl_semimarkov"
 PATH_VENV="$PATH_CONTENT_ROOT"/venv/"$V_ENV_NAME"/bin/activate
 
 # Define the port to use for the MLFlow UI
 PORT=5000
 
 # Path of the "store", i.e., where the mlflow runs are stored
-PATH_BACKEND_STORE="$PATH_CONTENT_ROOT"/experiments/mlruns
+PATH_BACKEND_STORE="$PATH_CONTENT_ROOT"/data/mlruns
 
 echo "Loading virtual environment"
 echo
