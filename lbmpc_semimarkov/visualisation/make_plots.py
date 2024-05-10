@@ -4,15 +4,17 @@ import pathlib
 import omegaconf
 import tensorflow as tf
 
-import plot_observations
-import plot_gp_mpc_trajectories
-import plot_gp_mpc_groundtruth
-from lbmpc_semimarkov.envs import barl_interface_env
+from lbmpc_semimarkov.visualisation import (
+    plot_gp_mpc_groundtruth,
+    plot_observations,
+    plot_gp_mpc_trajectories,
+)
+from lbmpc_semimarkov.envs import wrappers
 
 
 def make_plots(
     namespace_data: argparse.Namespace,
-    gym_env: barl_interface_env.EnvBARL,
+    gym_env: wrappers.EnvBARL,
     dict_config: omegaconf.DictConfig,
     list_namespace_gp_mpc: list[argparse.Namespace],
     list_namespace_execution_paths_gp_mpc_groundtruth: list[argparse.Namespace],

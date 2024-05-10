@@ -2,13 +2,15 @@ import matplotlib.pyplot as plt
 
 import argparse
 import numpy as np
+import numpy.typing
+
+from lbmpc_semimarkov.envs import wrappers
 
 from typing import Tuple
-from envs import barl_interface_env
 
 
 def plot_ground_truth(
-    env: barl_interface_env.EnvBARL,
+    env: wrappers.EnvBARL,
     name_env: str,
     namespace_true_path: argparse.Namespace,
 ) -> Tuple[plt.Figure, plt.Axes]:
@@ -29,28 +31,30 @@ def plot_ground_truth(
 
 # noinspection DuplicatedCode
 def plot_ground_truth_pendulum_trigo(
-    env: barl_interface_env.EnvBARL,
+    env: wrappers.EnvBARL,
     namespace_true_path: argparse.Namespace,
 ) -> Tuple[plt.Figure, plt.Axes]:
     str_title: str = (
         f"MPC on the ground truth $T( \\cdot | D)$ applied to the real system"
     )
+    assert env.unwrapped.action_max_value is not None
+    length_time_series: int = len(namespace_true_path.x)
+    action_max_value: float = env.unwrapped.action_max_value
+    dt:float = env.unwrapped.dt
+    horizon: int = env.unwrapped.horizon
 
     tuple_figsize: Tuple[int, int] = (12, 8)
     dim_state: int = 3
     dim_action: int = 1
-    axes_xlim: float = 1.5 * env.total_time_upper_bound * env.dt
+    axes_xlim: float = 1.5 * env.unwrapped.horizon * env.unwrapped.dt
 
-    assert env.action_max_value is not None
-    length_time_series: int = len(namespace_true_path.x)
-    action_max_value: float = env.action_max_value
     matrix_state_action: np.ndarray = np.array(namespace_true_path.x)
     matrix_state: np.ndarray = matrix_state_action[:, :dim_state]
     matrix_action: np.ndarray = matrix_state_action[:, dim_state:]
     matrix_action_unscaled: np.ndarray = matrix_action * action_max_value
 
     array_time_axis: np.ndarray = np.linspace(
-        0, env.dt * env.horizon, length_time_series
+        0, dt * horizon, length_time_series
     )
 
     # The number of columns is equal to the maximum of the number of states and actions
@@ -59,7 +63,7 @@ def plot_ground_truth_pendulum_trigo(
     n_rows_figure: int = 2
 
     fig: plt.Figure
-    ax: plt.Axes | np.ndarray
+    ax: plt.Axes | numpy.typing.NDArray[plt.Axes]
 
     fig, ax = plt.subplots(n_rows_figure, n_columns_figure, figsize=tuple_figsize)
 
@@ -110,9 +114,9 @@ def plot_ground_truth_pendulum_trigo(
     ax[0, 0].set_ylim([-1, 1])
     ax[0, 1].set_ylim([-1, 1])
     ax[0, 2].set_ylim([-8, 8])
-    ax[1, 0].set_ylim([-env.action_max_value, env.action_max_value])
-    ax[1, 1].set_ylim([-env.action_max_value, env.action_max_value])
-    ax[1, 2].set_ylim([-env.action_max_value, env.action_max_value])
+    ax[1, 0].set_ylim([-env.unwrapped.action_max_value, env.unwrapped.action_max_value])
+    ax[1, 1].set_ylim([-env.unwrapped.action_max_value, env.unwrapped.action_max_value])
+    ax[1, 2].set_ylim([-env.unwrapped.action_max_value, env.unwrapped.action_max_value])
 
     # Set figure title
     fig.suptitle(str_title)

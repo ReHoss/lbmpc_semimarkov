@@ -2,13 +2,15 @@ import matplotlib.pyplot as plt
 
 import argparse
 import numpy as np
+import numpy.typing
+
+from envs import wrappers
 
 from typing import Tuple
-from envs import barl_interface_env
 
 
 def plot_gp_mpc(
-    env: barl_interface_env.EnvBARL,
+    env: wrappers.EnvBARL,
     list_namespace_gp_mpc: list[argparse.Namespace],
     name_env: str,
 ) -> Tuple[plt.Figure, plt.Axes]:
@@ -28,7 +30,7 @@ def plot_gp_mpc(
 
 
 def plot_gp_mpc_pendulum_trigo(
-    env: barl_interface_env.EnvBARL, list_namespace_gp_mpc: list[argparse.Namespace]
+    env: wrappers.EnvBARL, list_namespace_gp_mpc: list[argparse.Namespace]
 ) -> Tuple[plt.Figure, plt.Axes]:
 
     # Assert all the namespace have the same length
@@ -45,13 +47,15 @@ def plot_gp_mpc_pendulum_trigo(
     dim_observation: int = env.observation_space.shape[0]
     dim_state: int = dim_observation  # TODO: Fix this at some point
     dim_action: int = env.action_space.shape[0]
-    axes_xlim: float = 1.5 * env.total_time_upper_bound * env.dt
+    dt: float = env.unwrapped.dt
+
+    axes_xlim: float = 1.5 * env.total_time_upper_bound * dt
 
     namespace_path_reference: argparse.Namespace = list_namespace_gp_mpc[0]
 
-    assert env.action_max_value is not None
+    assert env.unwrapped.action_max_value is not None
     length_time_series: int = len(namespace_path_reference.x)
-    action_max_value: float = env.action_max_value
+    action_max_value: float = env.unwrapped.action_max_value
 
     nd_array_state_action: np.ndarray = np.array(
         [namespace_gp_mpc.x for namespace_gp_mpc in list_namespace_gp_mpc]
@@ -61,7 +65,7 @@ def plot_gp_mpc_pendulum_trigo(
     nd_array_action_unscaled: np.ndarray = nd_array_action * action_max_value
 
     array_time_axis: np.ndarray = np.linspace(
-        0, env.dt * env.horizon, length_time_series
+        0, dt * env.horizon, length_time_series
     )
 
     # The number of columns is equal to the maximum of the number of states and actions
@@ -70,7 +74,7 @@ def plot_gp_mpc_pendulum_trigo(
     n_rows_figure: int = 2
 
     fig: plt.Figure
-    ax: plt.Axes | np.ndarray
+    ax: plt.Axes | numpy.typing.NDArray[plt.Axes]
 
     fig, ax = plt.subplots(n_rows_figure, n_columns_figure, figsize=tuple_figsize)
 

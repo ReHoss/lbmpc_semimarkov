@@ -5,7 +5,7 @@ from matplotlib import pyplot as plt
 
 from typing import Tuple
 
-from envs import barl_interface_env
+from envs import wrappers
 
 
 # def plot_observations(
@@ -30,16 +30,18 @@ from envs import barl_interface_env
 
 def plot_observations(
     namespace_data: argparse.Namespace,
-    env: barl_interface_env.EnvBARL,
+    env: wrappers.EnvBARL,
     list_semi_markov_interdecision_epochs: list[int],
 ) -> Tuple[plt.Figure, plt.Axes]:
 
     # Get the data
-    x = namespace_data.x
+    matrix_observations_time_series: np.ndarray = np.array(namespace_data.x)
 
     dim_obs = env.observation_space.shape[0]
     dim_act = env.action_space.shape[0]
-    assert x.shape[1] == dim_obs + dim_act
+    assert matrix_observations_time_series.shape[1] == dim_obs + dim_act
+
+    dt: float = env.unwrapped.dt
 
     ncols = max(dim_obs, dim_act)
     nrows = 2
@@ -47,9 +49,11 @@ def plot_observations(
     fig, ax = plt.subplots(nrows=nrows, ncols=ncols, figsize=(15, 10))
 
     # Time stops upp to current_t * dt included (dt is the time step)
-    array_time = np.cumsum(list_semi_markov_interdecision_epochs) * env.dt
+    array_time = np.cumsum(list_semi_markov_interdecision_epochs) * dt
     for i in range(dim_obs):
-        ax[0, i].plot(array_time, x[:, i], label="Data observations")
+        ax[0, i].plot(
+            array_time, matrix_observations_time_series[:, i], label="Data observations"
+        )
         ax[0, i].set_title(f"Observation {i}")
         ax[0, i].set_xlabel("Time")
         ax[0, i].set_ylabel("Observation")
@@ -57,15 +61,19 @@ def plot_observations(
         ax[0, i].legend()
 
     for i in range(dim_act):
-        ax[1, i].plot(array_time, x[:, dim_obs + i], label="Data actions")
+        ax[1, i].plot(
+            array_time,
+            matrix_observations_time_series[:, dim_obs + i],
+            label="Data actions",
+        )
         ax[1, i].set_title(f"Action {i}")
         ax[1, i].set_xlabel("Time")
         ax[1, i].set_ylabel("Action")
         ax[1, i].grid()
         ax[1, i].legend()
 
-    # Set xlim to be env.horizon * env.dt
-    xlim_upper = env.horizon * env.dt
+    # Set xlim to be env.horizon * dt
+    xlim_upper = env.horizon * dt
     for i in range(nrows):
         for j in range(ncols):
             ax[i, j].set_xlim(0, xlim_upper)

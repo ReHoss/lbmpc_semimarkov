@@ -4,11 +4,11 @@ import argparse
 import numpy as np
 
 from typing import Tuple
-from envs import barl_interface_env
+from envs import wrappers
 
 
 def plot_groundtruth_gp_mpc_groundtruth(
-    env: barl_interface_env.EnvBARL,
+    env: wrappers.EnvBARL,
     list_namespace_execution_paths_gp_mpc_groundtruth: list[argparse.Namespace],
     name_env: str,
 ) -> Tuple[plt.Figure, plt.Axes]:
@@ -29,7 +29,7 @@ def plot_groundtruth_gp_mpc_groundtruth(
 
 
 def plot_gp_mpc_groundtruth_trigo(
-    env: barl_interface_env.EnvBARL,
+    env: wrappers.EnvBARL,
     list_namespace_execution_paths_gp_mpc_groundtruth: list[argparse.Namespace],
 ) -> Tuple[plt.Figure, plt.Axes]:
 
@@ -49,20 +49,20 @@ def plot_gp_mpc_groundtruth_trigo(
         == len(list_namespace_execution_paths_gp_mpc_groundtruth[0].y_hat)
         for namespace_gp_mpc in list_namespace_execution_paths_gp_mpc_groundtruth
     )
-
+    env_dt = env.get_wrapper_attr("dt")
     tuple_figsize: Tuple[int, int] = (12, 8)
     dim_observation: int = env.observation_space.shape[0]
     dim_state: int = dim_observation  # TODO: Fix this at some point
     dim_action: int = env.action_space.shape[0]
-    axes_xlim: float = 1.5 * env.total_time_upper_bound * env.dt
+    axes_xlim: float = 1.5 * env.total_time_upper_bound * env_dt
 
     namespace_path_reference: argparse.Namespace = (
         list_namespace_execution_paths_gp_mpc_groundtruth[0]
     )
 
-    assert env.action_max_value is not None
+    assert env.unwrapped.action_max_value is not None
     length_time_series: int = len(namespace_path_reference.x)
-    action_max_value: float = env.action_max_value
+    action_max_value: float = env.unwrapped.action_max_value
 
     nd_array_state_action: np.ndarray = np.array(
         [
@@ -88,7 +88,7 @@ def plot_gp_mpc_groundtruth_trigo(
     )
 
     array_time_axis: np.ndarray = np.linspace(
-        0, env.dt * env.horizon, length_time_series
+        0, env_dt * env.horizon, length_time_series
     )
 
     # assert len(array_time_axis) == int(env.horizon)  # TODO: is this necessary?
