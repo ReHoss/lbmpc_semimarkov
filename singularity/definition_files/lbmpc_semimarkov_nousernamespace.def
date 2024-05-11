@@ -1,0 +1,52 @@
+Bootstrap: docker
+From: firedrakeproject/firedrake-vanilla:latest
+Stage: spython-base
+
+%labels
+authors="hosseinkhan"
+
+%post
+# The environment variables are only available in the post section, at build time
+
+export PATH_FIREDRAKE_VENV_ACTIVATION_SCRIPT=/home/firedrake/firedrake/bin/activate
+export URL_HYDROGYM=https://github.com/ReHoss/hydrogym.git@main
+
+# Source the firedrake environment
+/bin/bash -c "source $PATH_FIREDRAKE_VENV_ACTIVATION_SCRIPT && \
+pip install --upgrade pip && \
+pip install git+$URL_HYDROGYM && \
+pip install cma && \
+pip install colorednoise && \
+pip install gpflow && \
+pip install git+https://github.com/j-wilson/GPflowSampling.git@develop && \
+pip install gymnasium && \
+pip install jax && \
+pip install jaxlib && \
+pip install matplotlib && \
+pip install mlflow==1.27.0 && \
+pip install omegaconf && \
+pip install pystan && \
+pip install pyyaml && \
+pip install scikit-learn && \
+pip install scipy && \
+pip install tf_keras && \
+pip install tqdm"
+
+# Create a directory for mounting
+mkdir -p /home/firedrake/mount_dir/project_root/
+
+# PRINT THE CURRENT ENVIRONMENT TO THE TERMINAL
+/bin/bash -c "echo 'Current python: $(which python)' && \
+echo 'Current pip: $(which pip)' && \
+echo 'Current python version: $(python --version)' && \
+echo 'Current pip version: $(pip --version)' && \
+echo 'Current pip list: $(pip list)'"
+
+# Firedrake chmod approach
+%post
+# Set firedrake directory useable by all users
+chmod -R o+rwx /home/firedrake
+
+
+%runscript
+exec /bin/bash -l

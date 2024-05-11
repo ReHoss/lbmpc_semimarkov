@@ -9,6 +9,7 @@ archives
 data/*
 venv/*
 configs/batch
+singularity/images
 
 # PyCharm
 *.pyc
