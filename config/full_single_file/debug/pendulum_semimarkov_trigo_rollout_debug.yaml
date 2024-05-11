@@ -1,4 +1,4 @@
-name: debug
+name: debug_docker
 num_eval_trials: 1
 eval_frequency: 2
 resume: false

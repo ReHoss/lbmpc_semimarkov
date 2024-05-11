@@ -42,7 +42,7 @@ env:
     actions_per_plan: 1
   environment_parameters:
     dict_pde_config:
-      ep_length: 200
+      ep_length: 50
       dt: 0.05
     dict_init_condition_config:
       init_cond_type: equilibrium
