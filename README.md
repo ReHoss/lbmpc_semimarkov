@@ -1,7 +1,6 @@
 # Increasing Information for Model Predictive Control with Semi-Markov Decision Processes
 
 
-
 This work extends the ideas from the two papers of Mehta et al. :
 
 - [V. Mehta et al. - An Experimental Design Perspective on Model-Based Reinforcement
