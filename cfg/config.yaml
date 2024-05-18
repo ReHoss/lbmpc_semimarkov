@@ -1,0 +1,94 @@
+defaults:
+  - _self_  # This implies the entries in "defaults" override the entry in this config file
+  - env: pendulum
+  - alg: barl
+name: "default"
+num_eval_trials: 1
+eval_frequency: 50
+resume: False # CHANGES @STELLA
+env:
+    teleport: False
+    normalize_env: True
+    sample_exe: False
+    gp:
+      periodic: False
+      opt_max_iter: 1000
+    tf_precision: 64
+alg:
+    uncertainty_sampling: False
+    kgrl: False
+    kg_policy: False
+    pilco: False
+    gd_opt: False
+    eig: False
+    open_loop: False
+    choose_start_state: False
+    num_samples_mc: 1
+    num_s0_samps: 1
+    open_loop_mpc: False
+    sample_all_states: False
+    num_fs: 15
+    joint_eig: False
+    sampling_pool: False # CHANGES @STELLA
+    sampling_pool_perc: 0.0 # CHANGES @STELLA
+    compare_mode: False # CHANGES @STELLA
+    simple_rollout_sampling: False # CHANGES @STELLA
+mpc:  # This means values from the env.mpc namespace will be used
+  nsamps: ${env.mpc.nsamps}
+  planning_horizon: ${env.mpc.planning_horizon}
+  n_elites: ${env.mpc.n_elites}
+  beta: ${env.mpc.n_elites}
+  gamma: ${env.mpc.gamma}
+  xi: ${env.mpc.xi}
+  num_iters: ${env.mpc.num_iters}
+  actions_per_plan: ${env.mpc.actions_per_plan}
+eigmpc:  # This means values from the env.eigmpc namespace will be used
+  nsamps: ${env.eigmpc.nsamps}
+  planning_horizon: ${env.eigmpc.planning_horizon}
+  n_elites: ${env.eigmpc.n_elites}
+  beta: ${env.eigmpc.n_elites}
+  gamma: ${env.eigmpc.gamma}
+  xi: ${env.eigmpc.xi}
+  num_iters: ${env.eigmpc.num_iters}
+  actions_per_plan: ${env.eigmpc.actions_per_plan}
+test_mpc:
+  nsamps: ${env.mpc.nsamps}
+  planning_horizon: ${env.mpc.planning_horizon}
+  n_elites: ${env.mpc.n_elites}
+  beta: ${env.mpc.n_elites}
+  gamma: ${env.mpc.gamma}
+  xi: ${env.mpc.xi}
+  num_iters: ${env.mpc.num_iters}
+  actions_per_plan: ${env.mpc.actions_per_plan}
+  num_fs: 15
+
+num_iters: ${alg.num_iters}
+eval_bayes_policy: False
+seed: 13
+fixed_start_obs: False
+num_samples_mc: ${alg.num_samples_mc}
+num_init_data: 1
+test_set_size: 1000
+tf_eager: False
+tf_precision: ${env.tf_precision}
+n_paths: 15
+sample_exe: ${env.sample_exe}
+path_sampling_fraction: 0.8  # When sampling the execution paths, what fraction of the path should be sampled
+path_sampling_noise: 0.01  # Noise to add to the sampled execution paths
+sample_init_initially: False
+normalize_env: ${env.normalize_env}
+n_rand_acqopt: ${alg.n_rand_acqopt}
+crop_to_domain: True
+teleport: ${env.teleport}
+gp_fit_retries: 20
+fit_hypers: False
+eval_gp_hypers: False
+save_figures: False
+hydra:
+  job:
+    name: ${name}
+  run:
+      dir: experiments/${name}_${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+      dir: experiments/${name}_${now:%Y-%m-%d}/${now:%H-%M-%S}
+      subdir: seed_${hydra.job.num}

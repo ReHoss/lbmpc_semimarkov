@@ -1,0 +1,30 @@
+name: "bacpendulum-v0"
+gp:
+#  ls: [[0.001, 43.96, 4.20], [1.48, 0.95, 318.21]]  New test
+#  alpha: [0.93, 5.36]  New test
+  ls: [[2.27, 7.73, 138.94], [0.84, 288.15, 11.05]]
+  alpha: [0.54, 0.22]
+  sigma: 0.01
+  periodic: False
+  period: 2.0
+mpc:
+  nsamps: 25
+  planning_horizon: 20
+  n_elites: 3
+  beta: 3
+  gamma: 1.25
+  xi: 0.3
+  num_iters: 3
+  actions_per_plan: 6
+eigmpc:
+  nsamps: 25
+  planning_horizon: 15
+  n_elites: 3
+  beta: 3
+  gamma: 1.25
+  xi: 0.3
+  num_iters: 3
+  actions_per_plan: 1
+
+#  [2023-11-18 17:47:42,903][root][INFO] - gp_params for output 0 = {'ls': [0.0008372699819859026, 43.9610160339153, 4.195214405718088], 'alpha': 0.9282316804546513, 'sigma': 0.010000000000000005, 'n_dimx': 3}
+#  [2023-11-18 17:59:03,151][root][INFO] - gp_params for output 1 = {'ls': [1.4773395706920764, 0.9452725817723368, 318.2063307373814], 'alpha': 5.362385775105471, 'sigma': 0.010000000000000005, 'n_dimx': 3}

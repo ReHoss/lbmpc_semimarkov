@@ -1,0 +1,163 @@
+name: debug
+num_eval_trials: 5
+eval_frequency: 1
+resume: false
+env:
+  teleport: false
+  normalize_env: true
+  sample_exe: false
+  gp:
+    periodic: false
+    opt_max_iter: 10
+    ls:
+    - - 0.17
+      - 2.08
+      - 7.16
+      - 82.55
+      - 42.86
+      - 13.40
+    - - 0.26
+      - 1.61
+      - 2.09
+      - 84.71
+      - 94.44
+      - 91.40
+    - - 0.09
+      - 2.53
+      - 0.72
+      - 87.77
+      - 35.50
+      - 79.94
+    alpha:
+    - 12.23
+    - 10.14
+    - 6.57
+    sigma: 0.0011
+  tf_precision: 64
+  name: "lorenz-new-v0"
+  mpc:
+    nsamps: 25
+    planning_horizon: 2
+    n_elites: 1
+    beta: 3
+    gamma: 1.25
+    xi: 0.3
+    num_iters: 1
+    actions_per_plan: 1
+  eigmpc:
+    nsamps: 25
+    planning_horizon: 2
+    n_elites: 1
+    beta: 3
+    gamma: 1.25
+    xi: 0.3
+    num_iters: 1
+    actions_per_plan: 1
+  environment_parameters:
+    dict_pde_config:
+      ep_length: 300
+      dt: 0.05
+      control_step_freq: 1
+      rho: 28
+      sigma: 10
+      beta: 2.67
+    dict_sensing_actuation_config:
+      actuation_type: "full"
+      sensing_type: "full_observation"
+      sensor_std: 0.0
+    dict_init_condition_config:
+      init_cond_type: "random"
+      init_cond_scale: 0.1
+      index_start_equilibrium: 1
+    dict_reward_config:
+      state_reward:
+        reward_type: "square_l2_norm"
+      control_penalty:
+        control_penalty_type: "square_l2_norm"
+        parameters:
+          control_penalty_scale: 0.0
+    dict_scaling_constants:
+      observation: 1
+      state: 1
+      action: 10
+    path_rendering:
+    path_output_data:
+    dtype: float64
+alg:
+  uncertainty_sampling: false
+  kgrl: false
+  kg_policy: false
+  pilco: false
+  gd_opt: false
+  eig: true
+  open_loop: false
+  choose_start_state: false
+  num_samples_mc: 1
+  num_s0_samps: 1
+  open_loop_mpc: false
+  sample_all_states: false
+  num_fs: 15
+  joint_eig: false
+  sampling_pool: false
+  sampling_pool_perc: 0.0
+  compare_mode: false
+  simple_rollout_sampling: false # CHANGES @STELLA
+  learn_reward: false
+  num_iters: 4000
+  use_acquisition: true
+  rollout_sampling: true
+  n_rand_acqopt: 1000
+  use_mpc: false
+  # CHANGES @REMY Below
+  n_semimarkov_dt: 4
+mpc:
+  nsamps: ${env.mpc.nsamps}
+  planning_horizon: ${env.mpc.planning_horizon}
+  n_elites: ${env.mpc.n_elites}
+  beta: ${env.mpc.n_elites}
+  gamma: ${env.mpc.gamma}
+  xi: ${env.mpc.xi}
+  num_iters: ${env.mpc.num_iters}
+  actions_per_plan: ${env.mpc.actions_per_plan}
+eigmpc:
+  nsamps: ${env.eigmpc.nsamps}
+  planning_horizon: ${env.eigmpc.planning_horizon}
+  n_elites: ${env.eigmpc.n_elites}
+  beta: ${env.eigmpc.n_elites}
+  gamma: ${env.eigmpc.gamma}
+  xi: ${env.eigmpc.xi}
+  num_iters: ${env.eigmpc.num_iters}
+  actions_per_plan: ${env.eigmpc.actions_per_plan}
+test_mpc:
+  nsamps: ${env.mpc.nsamps}
+  planning_horizon: ${env.mpc.planning_horizon}
+  n_elites: ${env.mpc.n_elites}
+  beta: ${env.mpc.n_elites}
+  gamma: ${env.mpc.gamma}
+  xi: ${env.mpc.xi}
+  num_iters: ${env.mpc.num_iters}
+  actions_per_plan: ${env.mpc.actions_per_plan}
+  num_fs: 15
+num_iters: 100
+eval_bayes_policy: false
+seed: 94
+fixed_start_obs: false
+num_samples_mc: ${alg.num_samples_mc}
+num_init_data: 1
+test_set_size: 1000
+tf_eager: false
+tf_precision: 64
+n_paths: 15
+sample_exe: ${env.sample_exe}
+path_sampling_fraction: 0.8
+path_sampling_noise: 0.01
+sample_init_initially: true
+normalize_env: ${env.normalize_env}
+n_rand_acqopt: ${alg.n_rand_acqopt}
+crop_to_domain: false
+project_to_domain: false
+teleport: ${env.teleport}
+gp_fit_retries: 20
+fit_hypers: false
+eval_gp_hypers: false
+save_figures: false

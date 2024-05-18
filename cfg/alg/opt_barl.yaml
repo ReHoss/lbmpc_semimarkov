@@ -1,0 +1,11 @@
+# CHANGES @STELLA: new settings for optimised BARL
+learn_reward: False
+num_iters: 4000
+use_acquisition: True
+eig: True
+rollout_sampling: False
+n_rand_acqopt: 1000
+use_mpc: False
+sampling_pool: True
+sampling_pool_perc: 0.1
+compare_mode: True
